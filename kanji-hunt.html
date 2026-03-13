@@ -2641,8 +2641,11 @@ Return 1-3 options max. Return ONLY the JSON array.`
     const CapturePage = ({ onCapture, defaultLang, apiKey, googleTTSKey }) => {
       // Chrome detection: exclude Edge, Opera, etc. that also contain "Chrome"
       const isChrome = useRef(/Chrome\//.test(navigator.userAgent) && !/Edg|OPR|Brave/.test(navigator.userAgent)).current;
+      // Voice capture is available via Chrome Web Speech API OR Cloud STT (any browser with MediaRecorder + Google key)
+      const hasCloudSTT = useRef(typeof MediaRecorder !== 'undefined' && !!googleTTSKey).current;
+      const canVoiceCapture = isChrome || hasCloudSTT;
       
-      const [status, setStatus] = useState(isChrome ? 'listening' : 'manual');
+      const [status, setStatus] = useState(canVoiceCapture ? 'listening' : 'manual');
       const [errorMessage, setErrorMessage] = useState('');
       const [timeLeft, setTimeLeft] = useState(7);
       const [transcript, setTranscript] = useState('');
@@ -3064,7 +3067,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       };
       
       useEffect(() => {
-        if (!isChrome) return;
+        if (!canVoiceCapture) return;
         const timer = setTimeout(() => startListening(), 300);
         return () => { clearTimeout(timer); stopCurrentRecognition(); };
       }, []);
@@ -3257,13 +3260,13 @@ Return 1-3 options max. Return ONLY the JSON array.`
           
           {status === 'manual' && (
             <>
-              {!isChrome && (
-                <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', marginBottom: '20px' }}>Use Google Chrome browser to enable voice capture</p>
+              {!canVoiceCapture && (
+                <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', marginBottom: '20px' }}>Add Google API key in Settings to enable voice capture, or use Chrome</p>
               )}
               <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.6)', marginBottom: '24px' }}>{errorMessage}</p>
               <input type="text" value={manualInput} onChange={(e) => { const chars = [...e.target.value]; setManualInput(chars.length > 12 ? chars.slice(0, 12).join('') : e.target.value); }} onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()} placeholder={isJaMode ? "Type in Japanese..." : "Type in English..."} autoFocus style={{ width: '100%', maxWidth: '300px', padding: '16px 20px', fontSize: '24px', fontWeight: '600', border: '3px solid #000', borderRadius: '12px', textAlign: 'center', outline: 'none' }} />
               <button onClick={handleManualSubmit} disabled={!manualInput.trim()} style={{ marginTop: '16px', background: manualInput.trim() ? '#ffe600' : '#444', border: '3px solid #000', borderRadius: '12px', padding: '14px 48px', fontSize: '16px', fontWeight: '700', cursor: manualInput.trim() ? 'pointer' : 'default', boxShadow: manualInput.trim() ? '4px 4px 0 #000' : 'none', opacity: manualInput.trim() ? 1 : 0.5 }}>Capture</button>
-              {isChrome && (
+              {canVoiceCapture && (
                 <button onClick={startListening} style={{ marginTop: '24px', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.4)', fontSize: '13px', cursor: 'pointer', textDecoration: 'underline' }}>Try voice again</button>
               )}
             </>
