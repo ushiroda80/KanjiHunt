@@ -648,10 +648,10 @@ Return 1-3 options max. Return ONLY the JSON array.`
         recorder.start(1000);
         console.log('[CloudSTT] Recording started');
         
-        // Auto-stop after 5 seconds (single word capture doesn't need more)
+        // Auto-stop after 3.5 seconds (single word capture doesn't need more)
         const autoStop = setTimeout(() => {
           if (!stopped) { stopped = true; recorder.stop(); }
-        }, 5000);
+        }, 3500);
         
         stopFn = () => {
           if (!stopped) { stopped = true; clearTimeout(autoStop); recorder.stop(); }
@@ -3592,7 +3592,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.32.0 loaded');
+      console.log('[Kanji Hunt] v2.34.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
@@ -3714,7 +3714,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       
       return (
         <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', position: 'relative' }}>
-          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.32.0</div>
+          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.34.0</div>
           {/* Settings & Admin buttons */}
           <div style={{ position: 'fixed', top: '16px', right: '16px', zIndex: 50, display: 'flex', gap: '8px' }}>
             <button
