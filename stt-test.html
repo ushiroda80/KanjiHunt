@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>iPhone STT Test</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #f5f4f0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 12px; color: #888; margin-bottom: 24px; text-align: center; }
+  
+  .key-section { width: 100%; max-width: 400px; margin-bottom: 24px; }
+  .key-section input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+  .key-section .save-btn {
+    padding: 8px 16px;
+    background: #eee;
+    border: none;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .key-section .save-btn.saved { background: #d1fae5; color: #065f46; }
+  
+  .mic-btn {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    border: none;
+    background: #ffe600;
+    font-size: 40px;
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+    margin-bottom: 16px;
+  }
+  .mic-btn:active { transform: scale(0.95); }
+  .mic-btn.recording {
+    background: #ff3366;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  .mic-btn.processing {
+    background: #ddd;
+    cursor: default;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,51,102,0.4); }
+    50% { box-shadow: 0 0 0 20px rgba(255,51,102,0); }
+  }
+  
+  .status { font-size: 13px; color: #888; margin-bottom: 24px; min-height: 20px; }
+  
+  .result-card {
+    width: 100%; max-width: 400px;
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    margin-bottom: 12px;
+    display: none;
+  }
+  .result-card.visible { display: block; }
+  .result-label { font-size: 10px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .result-text { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+  .result-confidence { font-size: 11px; color: #888; }
+  
+  .debug {
+    width: 100%; max-width: 400px;
+    background: #fff;
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    margin-top: 12px;
+  }
+  .debug h3 { font-size: 11px; font-weight: 700; color: #999; margin-bottom: 6px; }
+  .debug-log {
+    font-family: 'SF Mono', monospace;
+    font-size: 10px;
+    color: #555;
+    line-height: 1.6;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+  
+  .browser-info {
+    font-size: 10px;
+    color: #bbb;
+    text-align: center;
+    margin-bottom: 16px;
+  }
+</style>
+</head>
+<body>
+
+<h1>iPhone STT Test</h1>
+<p class="subtitle">Tests Google Cloud Speech-to-Text via MediaRecorder.<br>Works on iPhone Safari, Chrome, and all browsers.</p>
+
+<div class="browser-info" id="browserInfo"></div>
+
+<div class="key-section">
+  <input type="password" id="apiKey" placeholder="Google Cloud API key" />
+  <button class="save-btn" id="saveBtn" onclick="saveKey()">Save key</button>
+</div>
+
+<button class="mic-btn" id="micBtn" onclick="toggleRecording()">🎤</button>
+<div class="status" id="status">Tap mic and say a Japanese word</div>
+
+<div class="result-card" id="resultCard">
+  <div class="result-label">Transcript</div>
+  <div class="result-text" id="resultText"></div>
+  <div class="result-confidence" id="resultConf"></div>
+</div>
+
+<div class="debug">
+  <h3>Debug Log</h3>
+  <div class="debug-log" id="debugLog"></div>
+</div>
+
+<script>
+// ============================================
+// STATE
+// ============================================
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let selectedMimeType = '';
+
+// ============================================
+// HELPERS
+// ============================================
+function log(msg) {
+  const el = document.getElementById('debugLog');
+  const time = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  el.textContent += `[${time}] ${msg}\n`;
+  el.scrollTop = el.scrollHeight;
+  console.log(msg);
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+function saveKey() {
+  const key = document.getElementById('apiKey').value.trim();
+  if (key) {
+    localStorage.setItem('stt_test_google_key', key);
+    const btn = document.getElementById('saveBtn');
+    btn.textContent = 'Saved!';
+    btn.classList.add('saved');
+    setTimeout(() => { btn.textContent = 'Save key'; btn.classList.remove('saved'); }, 1500);
+    log('API key saved to localStorage');
+  }
+}
+
+// Load saved key on startup
+window.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem('stt_test_google_key');
+  if (saved) {
+    document.getElementById('apiKey').value = saved;
+    log('Loaded saved API key');
+  }
+  
+  // Show browser info
+  const ua = navigator.userAgent;
+  const isSafari = /Safari/.test(ua) && !/Chrome/.test(ua);
+  const isIOS = /iPhone|iPad/.test(ua);
+  const isChrome = /Chrome/.test(ua) && !/Edg/.test(ua);
+  document.getElementById('browserInfo').textContent = 
+    `${isIOS ? 'iOS' : 'Desktop'} · ${isSafari ? 'Safari' : isChrome ? 'Chrome' : 'Other'} · MediaRecorder: ${typeof MediaRecorder !== 'undefined' ? '✅' : '❌'}`;
+  
+  // Detect supported audio formats
+  detectAudioFormat();
+});
+
+// ============================================
+// AUDIO FORMAT DETECTION
+// ============================================
+function detectAudioFormat() {
+  if (typeof MediaRecorder === 'undefined') {
+    log('❌ MediaRecorder not supported in this browser');
+    return;
+  }
+  
+  const types = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4;codecs=mp4a',
+    'audio/mp4',
+    'audio/ogg;codecs=opus',
+    'audio/wav',
+  ];
+  
+  log('Checking audio format support:');
+  for (const type of types) {
+    const supported = MediaRecorder.isTypeSupported(type);
+    log(`  ${type}: ${supported ? '✅' : '❌'}`);
+    if (supported && !selectedMimeType) {
+      selectedMimeType = type;
+    }
+  }
+  
+  if (selectedMimeType) {
+    log(`Selected format: ${selectedMimeType}`);
+  } else {
+    log('⚠️ No supported format found, will use default');
+  }
+}
+
+// ============================================
+// RECORDING
+// ============================================
+async function toggleRecording() {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+async function startRecording() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) {
+    setStatus('Enter your Google Cloud API key first');
+    return;
+  }
+  
+  try {
+    log('Requesting microphone access...');
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    log('Microphone access granted');
+    
+    // Create MediaRecorder with detected format
+    const options = selectedMimeType ? { mimeType: selectedMimeType } : {};
+    mediaRecorder = new MediaRecorder(stream, options);
+    audioChunks = [];
+    
+    const actualMime = mediaRecorder.mimeType;
+    log(`MediaRecorder created with mimeType: ${actualMime}`);
+    
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+        log(`Audio chunk: ${event.data.size} bytes`);
+      }
+    };
+    
+    mediaRecorder.onstop = async () => {
+      log(`Recording stopped. ${audioChunks.length} chunks collected`);
+      
+      // Stop all tracks
+      stream.getTracks().forEach(t => t.stop());
+      
+      // Build blob
+      const audioBlob = new Blob(audioChunks, { type: actualMime });
+      log(`Audio blob: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+      
+      // Send to Google STT
+      await transcribeAudio(audioBlob, actualMime, apiKey);
+    };
+    
+    // Start recording with timeslice for Safari compatibility
+    mediaRecorder.start(1000);
+    isRecording = true;
+    
+    const btn = document.getElementById('micBtn');
+    btn.classList.add('recording');
+    btn.textContent = '⏹';
+    setStatus('Listening... tap to stop');
+    log('Recording started');
+    
+  } catch (err) {
+    log(`❌ Microphone error: ${err.message}`);
+    setStatus(`Mic error: ${err.message}`);
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+    isRecording = false;
+    
+    const btn = document.getElementById('micBtn');
+    btn.classList.remove('recording');
+    btn.classList.add('processing');
+    btn.textContent = '⏳';
+    setStatus('Processing...');
+    log('Stopping recording...');
+  }
+}
+
+// ============================================
+// GOOGLE CLOUD STT
+// ============================================
+async function transcribeAudio(audioBlob, mimeType, apiKey) {
+  try {
+    // Convert blob to base64
+    log('Converting audio to base64...');
+    const base64 = await blobToBase64(audioBlob);
+    log(`Base64 length: ${base64.length} chars`);
+    
+    // Map mime type to Google STT encoding
+    const encoding = getSTTEncoding(mimeType);
+    log(`STT encoding: ${encoding}`);
+    
+    // Build request
+    const requestBody = {
+      config: {
+        encoding: encoding,
+        languageCode: 'ja-JP',
+        model: 'default',
+        enableAutomaticPunctuation: false,
+      },
+      audio: {
+        content: base64
+      }
+    };
+    
+    // If encoding is not LINEAR16, let Google auto-detect sample rate
+    // For LINEAR16 we'd need to specify it, but mp4/webm handle it automatically
+    
+    log('Sending to Google Cloud STT...');
+    const startTime = performance.now();
+    
+    const response = await fetch(
+      `https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      }
+    );
+    
+    const elapsed = Math.round(performance.now() - startTime);
+    log(`Response received in ${elapsed}ms`);
+    
+    if (!response.ok) {
+      const errText = await response.text();
+      log(`❌ API error ${response.status}: ${errText.slice(0, 200)}`);
+      setStatus(`API error: ${response.status}`);
+      resetMicButton();
+      return;
+    }
+    
+    const data = await response.json();
+    log(`Response: ${JSON.stringify(data).slice(0, 300)}`);
+    
+    if (data.results && data.results.length > 0) {
+      const result = data.results[0].alternatives[0];
+      const transcript = result.transcript;
+      const confidence = result.confidence;
+      
+      log(`✅ Transcript: "${transcript}" (confidence: ${(confidence * 100).toFixed(1)}%)`);
+      
+      // Show result
+      document.getElementById('resultText').textContent = transcript;
+      document.getElementById('resultConf').textContent = 
+        `Confidence: ${(confidence * 100).toFixed(1)}% · ${elapsed}ms · ${audioBlob.size} bytes · ${mimeType}`;
+      document.getElementById('resultCard').classList.add('visible');
+      setStatus('Tap mic to try again');
+    } else {
+      log('⚠️ No transcription results returned');
+      setStatus('No speech detected — try again');
+    }
+    
+    resetMicButton();
+    
+  } catch (err) {
+    log(`❌ Transcription error: ${err.message}`);
+    setStatus(`Error: ${err.message}`);
+    resetMicButton();
+  }
+}
+
+function resetMicButton() {
+  const btn = document.getElementById('micBtn');
+  btn.classList.remove('recording', 'processing');
+  btn.textContent = '🎤';
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      // Remove data URL prefix (e.g. "data:audio/mp4;base64,")
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function getSTTEncoding(mimeType) {
+  // Google Cloud STT V1 encoding mapping
+  // V1 doesn't natively support MP4_AAC (that's V2 only)
+  // For Safari's audio/mp4, use ENCODING_UNSPECIFIED and let Google auto-detect
+  const mime = mimeType.toLowerCase();
+  
+  if (mime.includes('webm') && mime.includes('opus')) return 'WEBM_OPUS';
+  if (mime.includes('webm')) return 'WEBM_OPUS';
+  if (mime.includes('ogg')) return 'OGG_OPUS';
+  if (mime.includes('wav')) return 'LINEAR16';
+  if (mime.includes('flac')) return 'FLAC';
+  if (mime.includes('mp3') || mime.includes('mpeg')) return 'MP3';
+  
+  // Safari outputs audio/mp4 (AAC) — V1 has no MP4_AAC enum
+  // ENCODING_UNSPECIFIED lets Google try to auto-detect from the audio header
+  if (mime.includes('mp4') || mime.includes('m4a')) return 'ENCODING_UNSPECIFIED';
+  
+  return 'ENCODING_UNSPECIFIED';
+}
+</script>
+</body>
+</html>
