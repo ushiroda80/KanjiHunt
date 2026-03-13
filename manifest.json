@@ -1,0 +1,18 @@
+{
+  "name": "Kanji Hunt",
+  "short_name": "Kanji Hunt",
+  "description": "Capture and learn Japanese vocabulary with pitch accent",
+  "start_url": "./kanji-hunt.html",
+  "display": "standalone",
+  "background_color": "#ffe600",
+  "theme_color": "#ffe600",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon-512.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

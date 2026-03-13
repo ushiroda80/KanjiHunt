@@ -1,0 +1,3805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Kanji Hunt</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#ffe600">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Kanji Hunt">
+  <link rel="apple-touch-icon" href="icon-512.svg">
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    input { font-family: inherit; }
+    /* Kanji font options - uncomment one to try different styles */
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;500&display=swap');
+    @keyframes pinToastFade {
+      0% { opacity: 0; transform: translateY(4px); }
+      15% { opacity: 1; transform: translateY(0); }
+      70% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+  </style>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+    
+    // ============================================
+    // API CONFIGURATION
+    // ============================================
+    
+    // Store API key in localStorage
+    const getStoredAPIKey = () => localStorage.getItem('wordHunter_apiKey') || '';
+    const setStoredAPIKey = (key) => localStorage.setItem('wordHunter_apiKey', key);
+    
+    // Store default capture language preference
+    const getStoredDefaultLang = () => localStorage.getItem('wordHunter_defaultLang') || 'ja';
+    const setStoredDefaultLang = (lang) => localStorage.setItem('wordHunter_defaultLang', lang);
+    
+    // Store Google Cloud TTS API key
+    const getStoredGoogleTTSKey = () => localStorage.getItem('wordHunter_googleTTSKey') || '';
+    const setStoredGoogleTTSKey = (key) => localStorage.setItem('wordHunter_googleTTSKey', key);
+    
+    // ============================================
+    // KANJIUM PITCH ACCENT DATABASE
+    // ============================================
+    // Source: https://github.com/mifunetoshiro/kanjium (CC BY-SA 4.0)
+    // Format: TSV with kanji\treading\taccent_number
+    // accent_number: 0=heiban (no drop), 1=atamadaka, N=drop after mora N
+    
+    const PITCH_DB_KEY = 'wordHunter_pitchDB';
+    const PITCH_DB_META_KEY = 'wordHunter_pitchDB_meta';
+    
+    const getPitchDB = () => {
+      try {
+        const raw = localStorage.getItem(PITCH_DB_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch(e) { return null; }
+    };
+    
+    const getPitchDBMeta = () => {
+      try {
+        const raw = localStorage.getItem(PITCH_DB_META_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch(e) { return null; }
+    };
+    
+    // Parse Kanjium accents.txt (TSV: kanji\treading\taccent) into a lookup map
+    // Key: "kanji:reading" or just "reading" for kana-only words
+    // Value: accent number (downstep position)
+    const importPitchDB = (tsvText) => {
+      const db = {};
+      let count = 0;
+      const lines = tsvText.split('\n');
+      for (const line of lines) {
+        const parts = line.split('\t');
+        if (parts.length >= 3) {
+          const kanji = parts[0].trim();
+          const reading = parts[1].trim();
+          const accent = parseInt(parts[2].trim(), 10);
+          if (kanji && reading && !isNaN(accent)) {
+            // Store with kanji key and reading-only key
+            db[kanji + ':' + reading] = accent;
+            if (!db[reading]) db[reading] = accent; // first reading wins for kana-only lookup
+            count++;
+          }
+        }
+      }
+      localStorage.setItem(PITCH_DB_KEY, JSON.stringify(db));
+      localStorage.setItem(PITCH_DB_META_KEY, JSON.stringify({
+        count,
+        importedAt: new Date().toISOString()
+      }));
+      return count;
+    };
+    
+    // Convert downstep position to pitch array [{kana, pitch, romaji}]
+    const downstepToPitchArray = (reading, downstep) => {
+      // Split reading into morae (not characters)
+      const morae = splitIntoMorae(reading);
+      const n = morae.length;
+      
+      return morae.map((mora, i) => {
+        let pitch;
+        if (downstep === 0) {
+          // Heiban: first mora low, rest high
+          pitch = i === 0 ? 0 : 1;
+        } else if (downstep === 1) {
+          // Atamadaka: first mora high, rest low
+          pitch = i === 0 ? 1 : 0;
+        } else {
+          // Nakadaka/Odaka: low, then high, then drops after position downstep
+          if (i === 0) pitch = 0;
+          else if (i < downstep) pitch = 1;
+          else pitch = 0;
+        }
+        return {
+          kana: mora,
+          pitch,
+          romaji: moraToRomaji(mora)
+        };
+      });
+    };
+    
+    // Split Japanese text into morae
+    const splitIntoMorae = (text) => {
+      const morae = [];
+      const chars = [...text];
+      for (let i = 0; i < chars.length; i++) {
+        const c = chars[i];
+        const next = chars[i + 1];
+        // Check if next char is a small kana (part of compound mora)
+        if (next && /[ゃゅょャュョァィゥェォ]/.test(next)) {
+          morae.push(c + next);
+          i++; // skip next
+        } else {
+          morae.push(c);
+        }
+      }
+      return morae;
+    };
+    
+    // Basic mora to romaji conversion
+    const moraToRomaji = (mora) => {
+      const map = {
+        'あ':'a','い':'i','う':'u','え':'e','お':'o',
+        'か':'ka','き':'ki','く':'ku','け':'ke','こ':'ko',
+        'さ':'sa','し':'shi','す':'su','せ':'se','そ':'so',
+        'た':'ta','ち':'chi','つ':'tsu','て':'te','と':'to',
+        'な':'na','に':'ni','ぬ':'nu','ね':'ne','の':'no',
+        'は':'ha','ひ':'hi','ふ':'fu','へ':'he','ほ':'ho',
+        'ま':'ma','み':'mi','む':'mu','め':'me','も':'mo',
+        'や':'ya','ゆ':'yu','よ':'yo',
+        'ら':'ra','り':'ri','る':'ru','れ':'re','ろ':'ro',
+        'わ':'wa','を':'wo','ん':'n',
+        'が':'ga','ぎ':'gi','ぐ':'gu','げ':'ge','ご':'go',
+        'ざ':'za','じ':'ji','ず':'zu','ぜ':'ze','ぞ':'zo',
+        'だ':'da','ぢ':'di','づ':'du','で':'de','ど':'do',
+        'ば':'ba','び':'bi','ぶ':'bu','べ':'be','ぼ':'bo',
+        'ぱ':'pa','ぴ':'pi','ぷ':'pu','ぺ':'pe','ぽ':'po',
+        'っ':'Q',
+        'きゃ':'kya','きゅ':'kyu','きょ':'kyo',
+        'しゃ':'sha','しゅ':'shu','しょ':'sho',
+        'ちゃ':'cha','ちゅ':'chu','ちょ':'cho',
+        'にゃ':'nya','にゅ':'nyu','にょ':'nyo',
+        'ひゃ':'hya','ひゅ':'hyu','ひょ':'hyo',
+        'みゃ':'mya','みゅ':'myu','みょ':'myo',
+        'りゃ':'rya','りゅ':'ryu','りょ':'ryo',
+        'ぎゃ':'gya','ぎゅ':'gyu','ぎょ':'gyo',
+        'じゃ':'ja','じゅ':'ju','じょ':'jo',
+        'びゃ':'bya','びゅ':'byu','びょ':'byo',
+        'ぴゃ':'pya','ぴゅ':'pyu','ぴょ':'pyo'
+      };
+      return map[mora] || mora;
+    };
+    
+    // Look up pitch accent from Kanjium DB
+    // Returns pitch array or null if not found
+    const lookupPitchAccent = (kanji, reading) => {
+      const db = getPitchDB();
+      if (!db) return null;
+      
+      // Try exact kanji:reading match first
+      const key1 = kanji + ':' + reading;
+      if (db[key1] !== undefined) {
+        return downstepToPitchArray(reading, db[key1]);
+      }
+      
+      // Try reading-only match
+      if (db[reading] !== undefined) {
+        return downstepToPitchArray(reading, db[reading]);
+      }
+      
+      return null;
+    };
+    
+    // ============================================
+    // PROMPT TEMPLATES
+    // ============================================
+    // All API prompt text lives here. Fetch functions below reference these.
+    // Edit prompts here; edit fetch/parse logic in the functions.
+    
+    const PROMPTS = {
+      // Phase 1: Core word data (Sonnet)
+      coreData: (word, contextHint) => `I need basic Japanese word data for: "${word}"
+${contextHint}
+Return ONLY valid JSON (no markdown, no explanation) in this exact format:
+{
+  "kanji": "${word}",
+  "hiragana": "reading in hiragana",
+  "romaji": "ro-ma-ji with hyphens between syllables",
+  "english": "primary English meaning",
+  "definitions": [
+    {
+      "rank": "primary",
+      "frequency": "common",
+      "meaning": "short English meaning (2-4 words)",
+      "definition": "Super concise two sentence ELI5 definition with usage nuance."
+    }
+  ],
+  "jlpt": "N5/N4/N3/N2/N1",
+  "contextUsage": {
+    "daily": 0-3,
+    "media": 0-3,
+    "business": 0-3,
+    "academic": 0-3
+  }
+}
+
+For definitions:
+- "rank": "primary" for the most common meaning, "secondary" for the next, "tertiary" for a third.
+- "frequency": This is about how common this MEANING is for THIS WORD, not how common the word itself is.
+  - "common": this is a standard/expected meaning of the word. If a word has only one meaning, it is ALWAYS "common".
+  - "uncommon": a secondary meaning that most learners wouldn't know.
+  - "rare": an obscure or literary meaning.
+- Include ALL genuinely distinct meanings (up to 3). Many Japanese words have 2-3 distinct meanings that learners need to know.
+- Only omit a meaning if it is truly archaic or never used in modern Japanese.
+- For example, 控える has 3 distinct meanings: to refrain, to have coming up, and to wait quietly.
+For contextUsage: 0 = not appropriate, 1 = acceptable but unusual, 2 = natural fit, 3 = ideal/perfect fit.
+Return ONLY the JSON object, nothing else.`,
+
+      // Single kanji context hints (used by coreData)
+      singleKanjiWithContext: (sourceContext) =>
+        `\nIMPORTANT: This single kanji was encountered in the word "${sourceContext}". For "english", give the most relevant meaning of this kanji as it contributes to "${sourceContext}". For "definition", explain what this kanji means in the context of "${sourceContext}" and other common words that use it. Do NOT give an obscure or archaic meaning.`,
+      singleKanjiAlone:
+        `\nIMPORTANT: This is a single kanji character. For "english", give its most common and widely-used meaning. For "definition", explain the kanji's core meaning and mention 2-3 common words that use it. Do NOT give obscure or archaic meanings.`,
+
+      // Phase 2a: Pitch accent + example sentences (Sonnet)
+      pitchAndSentences: (word, skipPitch, level, defHint) => `I need extended Japanese word data for: "${word}"
+
+Return ONLY valid JSON (no markdown, no explanation) in this exact format:
+{${skipPitch ? '' : `
+  "pitchAccent": [
+    {"kana": "あ", "pitch": 0, "romaji": "a"}
+  ],`}
+  "sentences": [
+    {
+      "id": 1,
+      "defMeaning": "the English meaning this sentence demonstrates",
+      "parts": [
+        {"text": "漢字", "reading": "かんじ"},
+        {"text": "テキスト"},
+        {"text": "${word}", "reading": "reading", "highlight": true}
+      ],
+      "english": "English translation"
+    }
+  ]
+}
+${skipPitch ? '' : `For pitchAccent:
+- Break the word into MORAE (not characters). Each mora is one beat: ん counts as its own mora, long vowels like おう are two morae (お and う separately), っ is its own mora, きゃ is ONE mora.
+- pitch: 0 = low, 1 = high. Use the standard NHK pitch accent dictionary pattern.
+- Include accurate romaji for each mora.
+- For example: 天使 (てんし) = [{"kana":"て","pitch":1,"romaji":"te"},{"kana":"ん","pitch":0,"romaji":"n"},{"kana":"し","pitch":0,"romaji":"shi"}]
+- For example: 花 (はな) = [{"kana":"は","pitch":0,"romaji":"ha"},{"kana":"な","pitch":1,"romaji":"na"}]`}
+For sentences: provide example sentences using ${level}-level grammar and vocabulary, except for the target word "${word}" itself. The surrounding sentence should be easy to understand for a ${level} learner.${defHint}
+
+Return ONLY the JSON object, nothing else.`,
+
+      // Phase 2b: Kanji details (Haiku)
+      kanjiDetails: (word) => `List the kanji characters in the Japanese word: "${word}"
+
+Return ONLY valid JSON (no markdown, no explanation):
+{"kanjiDetails": [
+  {"kanji": "字", "meaning": "meaning of this kanji", "strokeCount": 6}
+]}
+
+Include each kanji character in the word with its primary meaning and stroke count. Only include actual kanji characters, not hiragana or katakana.
+
+Return ONLY the JSON object.`,
+
+      // English→Japanese resolution (Haiku)
+      resolveEnglish: (englishWord) => `The user spoke the English word "${englishWord}" via speech recognition.
+
+Return a JSON array of Japanese translations. Rules:
+- ALWAYS include the literal word "${englishWord}" as the first entry
+- ONLY include additional entries if there is a TRUE homophone (identical or near-identical pronunciation in English, e.g. profit/prophet, flower/flour, right/write, bare/bear) OR if the word has genuinely different meanings in Japanese (e.g. "sentence" → 文章 writing/判決 legal verdict)
+- Do NOT include words that merely sound vaguely similar or share a root
+- For each entry, include a "confidence" score (0-100) representing how likely the user meant this word given speech recognition context
+- For each entry, include a "description" field: a brief 3-6 word English clarification that distinguishes this meaning (e.g. "written text or passage", "legal court verdict")
+
+Return ONLY valid JSON (no markdown):
+[
+  {"english": "word", "kanji": "漢字", "hiragana": "ひらがな", "confidence": 95, "description": "brief clarifying phrase"}
+]
+
+Return 1-3 options max. Return ONLY the JSON array.`
+    };
+
+    // ============================================
+    // API HELPERS
+    // ============================================
+    
+    const ANTHROPIC_HEADERS = (apiKey) => ({
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    });
+    
+    const callAnthropic = async (apiKey, model, maxTokens, prompt) => {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: ANTHROPIC_HEADERS(apiKey),
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`API error ${response.status}: ${errorBody.slice(0, 200)}`);
+      }
+      const data = await response.json();
+      let raw = data.content[0].text.trim();
+      raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+      return JSON.parse(raw);
+    };
+
+    // ============================================
+    // API FETCH FUNCTIONS
+    // ============================================
+    
+    // Phase 1: Quick fetch — kanji, reading, definition, context (small, fast response)
+    const fetchCoreData = async (word, apiKey, sourceContext) => {
+      if (!apiKey) { console.warn('[fetchCoreData] No API key'); return null; }
+      try {
+        const isSingleKanji = [...word].length === 1 && /[\u4e00-\u9faf]/.test(word);
+        const contextHint = isSingleKanji && sourceContext
+          ? PROMPTS.singleKanjiWithContext(sourceContext)
+          : isSingleKanji ? PROMPTS.singleKanjiAlone : '';
+        
+        console.log('[fetchCoreData] Calling API for:', word, sourceContext ? '(from: ' + sourceContext + ')' : '');
+        const parsed = await callAnthropic(apiKey, 'claude-sonnet-4-20250514', 1000, PROMPTS.coreData(word, contextHint));
+        console.log('[fetchCoreData] Parsed result:', parsed);
+        return parsed;
+      } catch (error) {
+        console.error('[fetchCoreData] FAILED:', error.message, error);
+        return null;
+      }
+    };
+    
+    // Phase 2a: Sonnet — pitch accent + example sentences
+    const fetchPitchAndSentences = async (word, apiKey, skipPitch = false, jlpt = null, definitions = []) => {
+      if (!apiKey) return null;
+      const level = jlpt || 'N3';
+      // Sentence context should be one level easier so learner focuses on the target word
+      const sentenceLevel = { 'N1': 'N2', 'N2': 'N3', 'N3': 'N4', 'N4': 'N5', 'N5': 'N5' }[level] || 'N4';
+      const defMeanings = definitions.map(d => d.meaning).filter(Boolean);
+      const defHint = defMeanings.length > 1
+        ? `\nThis word has these distinct meanings: ${defMeanings.map((m, i) => `${i+1}. "${m}"`).join(', ')}. Provide exactly 1 example sentence for EACH meaning. Set "defMeaning" to the exact meaning string.`
+        : defMeanings.length === 1
+        ? `\nThis word means "${defMeanings[0]}". Provide 3 example sentences. Set "defMeaning" to "${defMeanings[0]}" for all.`
+        : '\nProvide 3 example sentences. Set "defMeaning" to a short English meaning for each.';
+      try {
+        return await callAnthropic(apiKey, 'claude-sonnet-4-20250514', 2000, PROMPTS.pitchAndSentences(word, skipPitch, sentenceLevel, defHint));
+      } catch (error) {
+        console.error('[fetchPitchAndSentences] FAILED:', error);
+        return null;
+      }
+    };
+
+    // Phase 2b: Haiku — kanji details
+    const fetchKanjiDetails = async (word, apiKey) => {
+      try {
+        const parsed = await callAnthropic(apiKey, 'claude-haiku-4-5-20251001', 500, PROMPTS.kanjiDetails(word));
+        return parsed.kanjiDetails || [];
+      } catch (error) {
+        console.error('[fetchKanjiDetails] FAILED:', error);
+        return [];
+      }
+    };
+
+    // Post-process sentence parts: split mixed kanji+kana chunks so furigana only sits above kanji
+    const splitMixedPart = (part) => {
+      const { text, reading, highlight } = part;
+      if (!reading || !text) return [part];
+      
+      const isKanji = c => /[\u4e00-\u9faf]/.test(c);
+      const isKana = c => /[\u3040-\u309f\u30a0-\u30ff]/.test(c);
+      const toHiragana = c => c.charCodeAt(0) >= 0x30A0 && c.charCodeAt(0) <= 0x30FF ? String.fromCharCode(c.charCodeAt(0) - 0x60) : c;
+      
+      const hasKanjiChar = [...text].some(isKanji);
+      const hasKanaChar = [...text].some(isKana);
+      if (!hasKanjiChar || !hasKanaChar) return [part];
+      
+      // Split text into runs of kanji vs kana
+      const segments = [];
+      let cur = { chars: '', type: null };
+      for (const ch of text) {
+        const type = isKanji(ch) ? 'kanji' : 'kana';
+        if (type !== cur.type && cur.chars) { segments.push({ ...cur }); cur = { chars: '', type: null }; }
+        cur.chars += ch; cur.type = type;
+      }
+      if (cur.chars) segments.push(cur);
+      if (segments.length <= 1) return [part];
+      
+      // Match kana anchors in reading to split out kanji readings
+      const rc = [...reading];
+      let ri = 0;
+      const result = [];
+      
+      for (let si = 0; si < segments.length; si++) {
+        const seg = segments[si];
+        if (seg.type === 'kana') {
+          const sc = [...seg.chars];
+          let ok = true;
+          for (let i = 0; i < sc.length; i++) {
+            if (!rc[ri + i] || toHiragana(sc[i]) !== toHiragana(rc[ri + i])) { ok = false; break; }
+          }
+          if (!ok) return [part]; // bail
+          ri += sc.length;
+          result.push({ text: seg.chars, ...(highlight ? { highlight: true } : {}) });
+        } else {
+          // Find where next kana anchor starts in reading
+          const nextKana = segments[si + 1];
+          if (nextKana && nextKana.type === 'kana') {
+            const anchor = toHiragana([...nextKana.chars][0]);
+            let end = ri;
+            while (end < rc.length && toHiragana(rc[end]) !== anchor) end++;
+            result.push({ text: seg.chars, reading: rc.slice(ri, end).join(''), ...(highlight ? { highlight: true } : {}) });
+            ri = end;
+          } else {
+            result.push({ text: seg.chars, reading: rc.slice(ri).join(''), ...(highlight ? { highlight: true } : {}) });
+            ri = rc.length;
+          }
+        }
+      }
+      return result;
+    };
+    
+    const splitSentenceParts = (sentences) => {
+      if (!sentences) return [];
+      return sentences.map(s => ({
+        ...s,
+        parts: s.parts ? s.parts.flatMap(splitMixedPart) : []
+      }));
+    };
+
+    // Phase 2 wrapper: Sonnet for pitch+sentences, Haiku for kanji, in parallel
+    const fetchExtendedData = async (word, apiKey, skipPitch = false, jlpt = null, definitions = []) => {
+      if (!apiKey) return null;
+      try {
+        const [sonnetData, kanjiDetails] = await Promise.all([
+          fetchPitchAndSentences(word, apiKey, skipPitch, jlpt, definitions),
+          fetchKanjiDetails(word, apiKey)
+        ]);
+        const processedSentences = splitSentenceParts(sonnetData?.sentences || []);
+        console.log('[fetchExtendedData] sentences:', processedSentences.length, 'kanji:', kanjiDetails.length);
+        return {
+          pitchAccent: sonnetData?.pitchAccent || [],
+          sentences: processedSentences,
+          kanjiDetails
+        };
+      } catch (error) {
+        console.error('Failed to fetch extended data:', error);
+        return null;
+      }
+    };
+    
+    // Resolve English word → Japanese candidates via API (considers homophones)
+    const resolveEnglishToJapanese = async (englishWord, apiKey) => {
+      if (!apiKey) return null;
+      try {
+        const parsed = await callAnthropic(apiKey, 'claude-haiku-4-5-20251001', 300, PROMPTS.resolveEnglish(englishWord));
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch (error) {
+        console.error('Failed to resolve English→Japanese:', error);
+        return null;
+      }
+    };
+    
+    // Google Cloud TTS — natural Japanese pronunciation
+    const playGoogleTTS = async (text, googleTTSKey, speed = 1.0, hiraganaHint = null) => {
+      if (!googleTTSKey) return null;
+      try {
+        let input;
+        if (hiraganaHint) {
+          const ssml = `<speak><phoneme alphabet="x-amazon-pron-kana" ph="${hiraganaHint}">${text}</phoneme></speak>`;
+          input = { ssml };
+        } else {
+          input = { text };
+        }
+        
+        const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleTTSKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            input,
+            voice: {
+              languageCode: 'ja-JP',
+              name: 'ja-JP-Neural2-B',
+              ssmlGender: 'FEMALE'
+            },
+            audioConfig: {
+              audioEncoding: 'MP3',
+              speakingRate: speed,
+              pitch: 0
+            }
+          })
+        });
+        if (!response.ok) {
+          const err = await response.text();
+          console.error('[GoogleTTS] Error:', response.status, err);
+          if (hiraganaHint) {
+            console.warn('[GoogleTTS] SSML failed, retrying with plain text...');
+            return playGoogleTTS(text, googleTTSKey, speed, null);
+          }
+          return null;
+        }
+        const data = await response.json();
+        return new Audio('data:audio/mp3;base64,' + data.audioContent);
+      } catch (error) {
+        console.error('[GoogleTTS] Failed:', error);
+        return null;
+      }
+    };
+    
+    // Google Cloud Speech-to-Text — fallback for iOS Safari and non-Chrome browsers
+    // Uses MediaRecorder API (works everywhere) → sends audio to Google Cloud STT API
+    const recognizeWithCloudSTT = (googleKey, lang = 'ja-JP') => {
+      let stopFn = null;
+      const promise = new Promise(async (resolve, reject) => {
+        if (!googleKey) return reject(new Error('No Google API key'));
+        
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (e) {
+          return reject(new Error('mic-denied'));
+        }
+        
+        // Detect supported audio format (Safari = mp4/aac, Chrome = webm/opus)
+        let mimeType = 'audio/webm';
+        const formats = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/wav'];
+        for (const fmt of formats) {
+          if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
+        }
+        console.log('[CloudSTT] Using format:', mimeType);
+        
+        const recorder = new MediaRecorder(stream, { mimeType });
+        const chunks = [];
+        let stopped = false;
+        
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) chunks.push(e.data);
+        };
+        
+        recorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          if (chunks.length === 0) return reject(new Error('no-audio'));
+          
+          const blob = new Blob(chunks, { type: mimeType });
+          console.log('[CloudSTT] Audio blob:', blob.size, 'bytes,', mimeType);
+          
+          // Convert to base64
+          const base64 = await new Promise((res, rej) => {
+            const reader = new FileReader();
+            reader.onloadend = () => res(reader.result.split(',')[1]);
+            reader.onerror = () => rej(new Error('read-failed'));
+            reader.readAsDataURL(blob);
+          });
+          
+          // Map MIME to Google STT encoding parameter
+          let encoding = 'WEBM_OPUS';
+          if (mimeType.includes('mp4') || mimeType.includes('m4a')) encoding = 'ENCODING_UNSPECIFIED';
+          else if (mimeType.includes('wav')) encoding = 'LINEAR16';
+          else if (mimeType.includes('ogg')) encoding = 'OGG_OPUS';
+          
+          try {
+            const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${googleKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                config: {
+                  encoding,
+                  languageCode: lang,
+                  maxAlternatives: 5,
+                  model: 'default',
+                },
+                audio: { content: base64 },
+              }),
+            });
+            
+            if (!response.ok) {
+              // If WEBM_OPUS fails (some Safari versions), retry with OGG_OPUS
+              if (encoding === 'WEBM_OPUS') {
+                console.warn('[CloudSTT] WEBM_OPUS failed, retrying with OGG_OPUS...');
+                const retry = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${googleKey}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    config: { encoding: 'OGG_OPUS', languageCode: lang, maxAlternatives: 5 },
+                    audio: { content: base64 },
+                  }),
+                });
+                if (!retry.ok) {
+                  console.error('[CloudSTT] Retry failed:', await retry.text());
+                  return reject(new Error('stt-api-error'));
+                }
+                return resolve(parseSTTResults(await retry.json()));
+              }
+              console.error('[CloudSTT] API error:', await response.text());
+              return reject(new Error('stt-api-error'));
+            }
+            
+            resolve(parseSTTResults(await response.json()));
+          } catch (e) {
+            console.error('[CloudSTT] Network error:', e);
+            reject(new Error('stt-network-error'));
+          }
+        };
+        
+        // Start recording with 1000ms timeslice (helps Safari produce valid chunks)
+        recorder.start(1000);
+        console.log('[CloudSTT] Recording started');
+        
+        // Auto-stop after 5 seconds (single word capture doesn't need more)
+        const autoStop = setTimeout(() => {
+          if (!stopped) { stopped = true; recorder.stop(); }
+        }, 5000);
+        
+        stopFn = () => {
+          if (!stopped) { stopped = true; clearTimeout(autoStop); recorder.stop(); }
+        };
+      });
+      
+      promise.stop = stopFn;
+      return promise;
+    };
+    
+    // Parse Google Cloud STT response into our standard format
+    const parseSTTResults = (data) => {
+      if (!data.results || data.results.length === 0) {
+        return { transcript: '', alternatives: [], confidence: 0 };
+      }
+      const result = data.results[0];
+      const alts = (result.alternatives || []).map(a => ({
+        transcript: (a.transcript || '').replace(/\s+/g, ''),
+        confidence: a.confidence || 0,
+      }));
+      return {
+        transcript: alts[0]?.transcript || '',
+        alternatives: alts.slice(0, 3),
+        confidence: alts[0]?.confidence || 0,
+      };
+    };
+    
+    // Detect if we should use Cloud STT instead of Web Speech API
+    const shouldUseCloudSTT = () => {
+      // No Web Speech API → must use Cloud STT
+      if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return true;
+      // iOS: all browsers are Safari under the hood, Web Speech API unreliable
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (isIOS) return true;
+      return false;
+    };
+    
+    // Estimate per-mora timing from total audio duration
+    const getMoraTimings = (pitchAccent, totalDuration) => {
+      if (!pitchAccent || pitchAccent.length === 0) return [];
+      const speechDuration = totalDuration * 0.85;
+      const startOffset = totalDuration * 0.08;
+      const moraWeight = (kana) => {
+        if (kana === 'っ') return 0.5;
+        if (kana === 'ん') return 0.8;
+        if (kana === 'ー') return 1.2;
+        if (/^[うおいえあ]$/.test(kana)) return 0.9;
+        return 1.0;
+      };
+      const weights = pitchAccent.map(m => moraWeight(m.kana));
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+      const timings = [];
+      let elapsed = startOffset;
+      for (let i = 0; i < pitchAccent.length; i++) {
+        const dur = (weights[i] / totalWeight) * speechDuration;
+        timings.push({ start: elapsed, duration: dur });
+        elapsed += dur;
+      }
+      return timings;
+    };
+    
+    // ============================================
+    // SETTINGS PAGE
+    // ============================================
+    
+    const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose }) => {
+      const [selectedLang, setSelectedLang] = useState(defaultLang);
+      const [tipsOn, setTipsOn] = useState(() => getTipsEnabled() && !getTipsPermanentlyDismissed());
+      const [saved, setSaved] = useState(false);
+      
+      const handleSave = () => {
+        onSaveDefaultLang(selectedLang);
+        setTipsEnabled(tipsOn);
+        if (tipsOn) {
+          // Re-enabling tips: clear permanent dismiss and reset trigger count
+          setTipsPermanentlyDismissed(false);
+          setTipTriggerCount(0);
+        }
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      };
+      
+      return (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.8)', zIndex: 200,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '24px'
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: '16px', padding: '24px',
+            width: '100%', maxWidth: '360px', position: 'relative',
+            maxHeight: '85vh', overflowY: 'auto'
+          }}>
+            <button onClick={onClose} style={{
+              position: 'absolute', top: '12px', right: '12px',
+              background: 'none', border: 'none', fontSize: '24px',
+              cursor: 'pointer', color: '#888'
+            }}>×</button>
+            
+            <h2 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '8px' }}>Settings</h2>
+            <p style={{ fontSize: '13px', color: '#666', marginBottom: '20px' }}>
+              Customize your Kanji Hunt experience.
+            </p>
+            
+            <label style={{ fontSize: '12px', fontWeight: '600', color: '#333' }}>
+              Default Capture Language
+            </label>
+            <p style={{ fontSize: '11px', color: '#999', marginTop: '4px', marginBottom: '10px', lineHeight: 1.4 }}>
+              The toggle resets to this each time you start a new capture.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+              {[
+                { id: 'ja', flag: '🇯🇵', label: 'Japanese', desc: 'For intermediate+ learners' },
+                { id: 'en', flag: '🇺🇸', label: 'English', desc: 'For beginners' }
+              ].map(lang => (
+                <button
+                  key={lang.id}
+                  onClick={() => setSelectedLang(lang.id)}
+                  style={{
+                    flex: 1, padding: '12px 8px', borderRadius: '10px', cursor: 'pointer',
+                    border: selectedLang === lang.id ? '3px solid #000' : '2px solid #ddd',
+                    background: selectedLang === lang.id ? '#ffe600' : '#f8f8f8',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+                    boxShadow: selectedLang === lang.id ? '3px 3px 0 #000' : 'none',
+                    transform: selectedLang === lang.id ? 'translate(-1px, -1px)' : 'none',
+                    transition: 'all 0.1s ease'
+                  }}
+                >
+                  <span style={{ fontSize: '24px' }}>{lang.flag}</span>
+                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#000' }}>{lang.label}</span>
+                  <span style={{ fontSize: '10px', color: '#888' }}>{lang.desc}</span>
+                </button>
+              ))}
+            </div>
+            
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ fontSize: '12px', fontWeight: '600', color: '#333' }}>
+                Voice Capture Tips
+              </label>
+              <p style={{ fontSize: '11px', color: '#999', marginTop: '4px', marginBottom: '10px', lineHeight: 1.4 }}>
+                Show helpful tips when voice recognition has trouble.
+              </p>
+              <button
+                onClick={() => setTipsOn(!tipsOn)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '10px 14px', borderRadius: '10px', cursor: 'pointer',
+                  border: '2px solid ' + (tipsOn ? '#000' : '#ddd'),
+                  background: tipsOn ? '#ffe600' : '#f8f8f8',
+                  boxShadow: tipsOn ? '2px 2px 0 #000' : 'none',
+                  transform: tipsOn ? 'translate(-1px, -1px)' : 'none',
+                  transition: 'all 0.1s ease', width: '100%',
+                }}
+              >
+                <span style={{ fontSize: '18px' }}>{tipsOn ? '💡' : '🔇'}</span>
+                <span style={{ fontSize: '13px', fontWeight: '700', color: '#000' }}>{tipsOn ? 'Tips enabled' : 'Tips disabled'}</span>
+              </button>
+            </div>
+            
+            <button onClick={handleSave} style={{
+              width: '100%', padding: '14px', fontSize: '14px', fontWeight: '700',
+              background: saved ? '#4ade80' : '#ffe600',
+              border: '3px solid #000', borderRadius: '8px', cursor: 'pointer'
+            }}>
+              {saved ? '✓ Saved!' : 'Save'}
+            </button>
+            
+            <div style={{ marginTop: '24px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
+              <label style={{ fontSize: '11px', fontWeight: '700', color: '#444', display: 'block', marginBottom: '10px' }}>
+                📝 Data Sources & Attribution
+              </label>
+              <div style={{ fontSize: '10px', color: '#888', lineHeight: 1.8 }}>
+                <p><strong>Pitch Accent Data:</strong> Kanjium by Uros Ozvatic (<a href="https://github.com/mifunetoshiro/kanjium" target="_blank" style={{ color: '#666' }}>GitHub</a>) · Licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" style={{ color: '#666' }}>CC BY-SA 4.0</a>. Sourced from Wadoku (<a href="https://www.wadoku.de" target="_blank" style={{ color: '#666' }}>wadoku.de</a>) and EDRDG.</p>
+                <p><strong>Word Data & Examples:</strong> Generated by Claude (Anthropic) via API.</p>
+                <p><strong>Text-to-Speech:</strong> Google Cloud Text-to-Speech Neural2 voices.</p>
+                <p><strong>Speech Recognition:</strong> Web Speech API (browser-native).</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+    
+    const AdminPage = ({ apiKey, onSaveKey, googleTTSKey, onSaveGoogleTTSKey, onClose, wordStore, pinnedWords, onDeleteUnpinned }) => {
+      const [inputKey, setInputKey] = useState(apiKey);
+      const [inputGoogleKey, setInputGoogleKey] = useState(googleTTSKey);
+      const [saved, setSaved] = useState(false);
+      const [confirmDelete, setConfirmDelete] = useState(false);
+      
+      const totalWords = Object.keys(wordStore || {}).length;
+      const pinnedCount = pinnedWords ? pinnedWords.size : 0;
+      const unpinnedCount = totalWords - pinnedCount;
+      
+      const handleSave = () => {
+        onSaveKey(inputKey);
+        onSaveGoogleTTSKey(inputGoogleKey);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      };
+      
+      return (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.8)', zIndex: 200,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '24px'
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: '16px', padding: '24px',
+            width: '100%', maxWidth: '360px', position: 'relative',
+            maxHeight: '85vh', overflowY: 'auto'
+          }}>
+            <button onClick={onClose} style={{
+              position: 'absolute', top: '12px', right: '12px',
+              background: 'none', border: 'none', fontSize: '24px',
+              cursor: 'pointer', color: '#888'
+            }}>×</button>
+            
+            <h2 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '8px' }}>Admin</h2>
+            <p style={{ fontSize: '13px', color: '#666', marginBottom: '20px' }}>
+              API keys and data management.
+            </p>
+            
+            <label style={{ fontSize: '12px', fontWeight: '600', color: '#333' }}>
+              Anthropic API Key
+            </label>
+            <input
+              type="password"
+              value={inputKey}
+              onChange={(e) => setInputKey(e.target.value)}
+              placeholder="sk-ant-api03-..."
+              style={{
+                width: '100%', padding: '12px', fontSize: '14px',
+                border: '2px solid #ddd', borderRadius: '8px',
+                marginTop: '8px', marginBottom: '20px'
+              }}
+            />
+            
+            <label style={{ fontSize: '12px', fontWeight: '600', color: '#333' }}>
+              Google Cloud TTS Key
+            </label>
+            <p style={{ fontSize: '11px', color: '#999', marginTop: '4px', marginBottom: '8px', lineHeight: 1.4 }}>
+              For natural Japanese pronunciation. Optional — falls back to browser voice.
+            </p>
+            <input
+              type="password"
+              value={inputGoogleKey}
+              onChange={(e) => setInputGoogleKey(e.target.value)}
+              placeholder="AIzaSyB..."
+              style={{
+                width: '100%', padding: '12px', fontSize: '14px',
+                border: '2px solid #ddd', borderRadius: '8px',
+                marginBottom: '20px'
+              }}
+            />
+            
+            <button onClick={handleSave} style={{
+              width: '100%', padding: '14px', fontSize: '14px', fontWeight: '700',
+              background: saved ? '#4ade80' : '#ffe600',
+              border: '3px solid #000', borderRadius: '8px', cursor: 'pointer'
+            }}>
+              {saved ? '✓ Saved!' : 'Save'}
+            </button>
+            
+            <p style={{ fontSize: '11px', color: '#999', marginTop: '16px', lineHeight: 1.5 }}>
+              Keys are stored locally and never sent anywhere except their respective APIs.
+              Anthropic: <a href="https://console.anthropic.com" target="_blank" style={{ color: '#666' }}>console.anthropic.com</a> · 
+              Google TTS: <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style={{ color: '#666' }}>cloud.google.com</a>
+            </p>
+            
+            <div style={{ marginTop: '24px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
+              <label style={{ fontSize: '11px', fontWeight: '700', color: '#444', display: 'block', marginBottom: '8px' }}>
+                📚 Pitch Accent Database (Kanjium)
+              </label>
+              {(() => {
+                const meta = getPitchDBMeta();
+                if (meta) {
+                  return (
+                    <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '12px', fontSize: '12px', color: '#166534' }}>
+                      ✅ Loaded: {meta.count.toLocaleString()} words · Imported {new Date(meta.importedAt).toLocaleDateString()}
+                      <button onClick={() => { localStorage.removeItem(PITCH_DB_KEY); localStorage.removeItem(PITCH_DB_META_KEY); setSaved(false); }} style={{ marginLeft: '12px', fontSize: '11px', color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Remove</button>
+                    </div>
+                  );
+                }
+                return (
+                  <div>
+                    <p style={{ fontSize: '11px', color: '#666', marginBottom: '8px', lineHeight: 1.5 }}>
+                      Paste the contents of <a href="https://github.com/mifunetoshiro/kanjium/blob/master/data/source_files/raw/accents.txt" target="_blank" style={{ color: '#2563eb' }}>accents.txt</a> from Kanjium (124K words with verified pitch accent data).
+                      Click "Raw" on GitHub, select all, copy & paste below.
+                    </p>
+                    <textarea
+                      id="pitchDbInput"
+                      placeholder="Paste accents.txt content here (tab-separated: kanji → reading → accent number)..."
+                      style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical' }}
+                    />
+                    <button onClick={() => {
+                      const text = document.getElementById('pitchDbInput').value;
+                      if (!text.trim()) return;
+                      const count = importPitchDB(text);
+                      alert(`Imported ${count.toLocaleString()} pitch accent entries!`);
+                      setSaved(true);
+                      setTimeout(() => setSaved(false), 1500);
+                    }} style={{
+                      marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
+                      background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                    }}>
+                      Import Pitch Data
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+            
+            <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
+              <label style={{ fontSize: '11px', fontWeight: '700', color: '#444', display: 'block', marginBottom: '8px' }}>
+                🏷️ JLPT Level Database
+              </label>
+              {(() => {
+                const meta = getJlptDBMeta();
+                if (meta) {
+                  return (
+                    <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '12px', fontSize: '12px', color: '#166534' }}>
+                      ✅ Loaded: {meta.count.toLocaleString()} entries · Imported {new Date(meta.importedAt).toLocaleDateString()}
+                      <button onClick={() => { localStorage.removeItem(JLPT_DB_KEY); localStorage.removeItem(JLPT_DB_META_KEY); setSaved(false); }} style={{ marginLeft: '12px', fontSize: '11px', color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Remove</button>
+                    </div>
+                  );
+                }
+                return (
+                  <div>
+                    <p style={{ fontSize: '11px', color: '#666', marginBottom: '8px', lineHeight: 1.5 }}>
+                      Overrides AI-guessed JLPT levels with verified data from <a href="https://github.com/stephenmk/yomitan-jlpt-vocab" target="_blank" style={{ color: '#2563eb' }}>yomitan-jlpt-vocab</a>.
+                      Paste the contents of the pre-converted <code>jlpt_lookup.json</code> file below.
+                    </p>
+                    <textarea
+                      id="jlptDbInput"
+                      placeholder='Paste JLPT lookup JSON here ({"投資":"N1","食べる":"N5",...})...'
+                      style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical' }}
+                    />
+                    <button onClick={() => {
+                      const text = document.getElementById('jlptDbInput').value;
+                      if (!text.trim()) return;
+                      const count = importJlptDB(text);
+                      if (count > 0) {
+                        alert(`Imported ${count.toLocaleString()} JLPT entries!`);
+                        setSaved(true);
+                        setTimeout(() => setSaved(false), 1500);
+                      } else {
+                        alert('Failed to parse JLPT data. Make sure it is valid JSON.');
+                      }
+                    }} style={{
+                      marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
+                      background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                    }}>
+                      Import JLPT Data
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+            <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
+              <label style={{ fontSize: '11px', fontWeight: '700', color: '#444', display: 'block', marginBottom: '8px' }}>
+                📖 Kanji Readings Database
+              </label>
+              {(() => {
+                const meta = getReadingsDBMeta();
+                if (meta) {
+                  return (
+                    <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '12px', fontSize: '12px', color: '#166534' }}>
+                      ✅ Loaded: {meta.count.toLocaleString()} kanji · Imported {new Date(meta.importedAt).toLocaleDateString()}
+                      <button onClick={() => { localStorage.removeItem(READINGS_DB_KEY); localStorage.removeItem(READINGS_DB_META_KEY); setSaved(false); }} style={{ marginLeft: '12px', fontSize: '11px', color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Remove</button>
+                    </div>
+                  );
+                }
+                return (
+                  <div>
+                    <p style={{ fontSize: '11px', color: '#666', marginBottom: '8px', lineHeight: 1.5 }}>
+                      Enables accurate per-character furigana for multi-kanji words. Convert <code>kanji.json</code> from <a href="https://github.com/davidluzgouveia/kanji-data" target="_blank" style={{ color: '#2563eb' }}>kanji-data</a> using the converter tool, then paste the output below.
+                    </p>
+                    <textarea
+                      id="readingsDbInput"
+                      placeholder='Paste readings JSON here ({"連":["れん"],"続":["ぞく","つづ"],...})...'
+                      style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical' }}
+                    />
+                    <button onClick={() => {
+                      const text = document.getElementById('readingsDbInput').value;
+                      if (!text.trim()) return;
+                      const count = importReadingsDB(text);
+                      if (count > 0) {
+                        alert(`Imported ${count.toLocaleString()} kanji readings!`);
+                        setSaved(true);
+                        setTimeout(() => setSaved(false), 1500);
+                      } else {
+                        alert('Failed to parse readings data. Make sure it is valid JSON.');
+                      }
+                    }} style={{
+                      marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
+                      background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                    }}>
+                      Import Readings Data
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+            
+            {/* Data Management */}
+            <div style={{ borderTop: '1px solid #eee', paddingTop: '20px', marginTop: '20px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: '700', marginBottom: '12px', color: '#333' }}>
+                📊 Word Data
+              </h3>
+              <p style={{ fontSize: '12px', color: '#666', marginBottom: '12px' }}>
+                {totalWords} total · {pinnedCount} pinned · {unpinnedCount} unpinned
+              </p>
+              
+              {!confirmDelete ? (
+                <button onClick={() => setConfirmDelete(true)} disabled={unpinnedCount === 0} style={{
+                  padding: '8px 16px', fontSize: '12px', fontWeight: '700',
+                  background: unpinnedCount > 0 ? '#fff' : '#f5f5f5',
+                  border: unpinnedCount > 0 ? '2px solid #dc2626' : '2px solid #ddd',
+                  borderRadius: '6px', cursor: unpinnedCount > 0 ? 'pointer' : 'default',
+                  color: unpinnedCount > 0 ? '#dc2626' : '#aaa',
+                  opacity: unpinnedCount > 0 ? 1 : 0.5,
+                }}>
+                  Delete all unpinned words ({unpinnedCount})
+                </button>
+              ) : (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '12px' }}>
+                  <p style={{ fontSize: '12px', fontWeight: '600', color: '#dc2626', marginBottom: '8px' }}>
+                    Delete {unpinnedCount} unpinned word{unpinnedCount !== 1 ? 's' : ''}? This cannot be undone.
+                  </p>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => { onDeleteUnpinned(); setConfirmDelete(false); }} style={{
+                      padding: '6px 16px', fontSize: '12px', fontWeight: '700',
+                      background: '#dc2626', border: 'none', borderRadius: '6px',
+                      color: '#fff', cursor: 'pointer',
+                    }}>
+                      Yes, delete
+                    </button>
+                    <button onClick={() => setConfirmDelete(false)} style={{
+                      padding: '6px 16px', fontSize: '12px', fontWeight: '600',
+                      background: '#fff', border: '1px solid #ddd', borderRadius: '6px',
+                      color: '#666', cursor: 'pointer',
+                    }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    };
+    // Source: https://github.com/stephenmk/yomitan-jlpt-vocab (CC BY-SA 4.0)
+    // Based on Jonathan Waller's JLPT lists, cross-referenced with JMDict
+    
+    const JLPT_DB_KEY = 'wordHunter_jlptDB';
+    const JLPT_DB_META_KEY = 'wordHunter_jlptDB_meta';
+    
+    const getJlptDB = () => {
+      try {
+        const raw = localStorage.getItem(JLPT_DB_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch(e) { return null; }
+    };
+    
+    const getJlptDBMeta = () => {
+      try {
+        const raw = localStorage.getItem(JLPT_DB_META_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch(e) { return null; }
+    };
+    
+    // Import pre-converted JLPT lookup JSON: {"word": "N1", "食べる": "N5", ...}
+    const importJlptDB = (jsonText) => {
+      try {
+        const db = JSON.parse(jsonText);
+        const count = Object.keys(db).length;
+        localStorage.setItem(JLPT_DB_KEY, JSON.stringify(db));
+        localStorage.setItem(JLPT_DB_META_KEY, JSON.stringify({
+          count,
+          importedAt: new Date().toISOString()
+        }));
+        return count;
+      } catch(e) {
+        console.error('[JLPT DB] Parse error:', e);
+        return 0;
+      }
+    };
+    
+    // Lookup JLPT level for a word
+    const lookupJlptLevel = (kanji, hiragana) => {
+      const db = getJlptDB();
+      if (!db) return null;
+      return db[kanji] || db[hiragana] || null;
+    };
+
+    // ============================================
+    // KANJI READINGS DATABASE (KANJIDIC)
+    // ============================================
+    // Source: KANJIDIC via davidluzgouveia/kanji-data (CC BY-SA 4.0)
+    // Format: {"kanji": ["reading1", "reading2", ...]} — all readings in hiragana
+    // On'yomi converted from katakana, kun'yomi stems (okurigana stripped)
+    // Used to split furigana across consecutive kanji characters
+    
+    const READINGS_DB_KEY = 'wordHunter_readingsDB';
+    const READINGS_DB_META_KEY = 'wordHunter_readingsDB_meta';
+    
+    const getReadingsDB = () => {
+      try {
+        const raw = localStorage.getItem(READINGS_DB_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch(e) { return null; }
+    };
+    
+    const getReadingsDBMeta = () => {
+      try {
+        const raw = localStorage.getItem(READINGS_DB_META_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch(e) { return null; }
+    };
+    
+    // Import pre-converted readings JSON: {"連": ["れん"], "続": ["ぞく", "つづ"], ...}
+    const importReadingsDB = (jsonText) => {
+      try {
+        const db = JSON.parse(jsonText);
+        const count = Object.keys(db).length;
+        localStorage.setItem(READINGS_DB_KEY, JSON.stringify(db));
+        localStorage.setItem(READINGS_DB_META_KEY, JSON.stringify({
+          count,
+          importedAt: new Date().toISOString()
+        }));
+        return count;
+      } catch(e) {
+        console.error('[Readings DB] Parse error:', e);
+        return 0;
+      }
+    };
+    
+    // Get all known readings for a single kanji character
+    const getKanjiReadings = (kanjiChar) => {
+      const db = getReadingsDB();
+      if (!db) return null;
+      return db[kanjiChar] || null;
+    };
+
+    // ============================================
+    // MOCK DATA & WORD STORAGE
+    // ============================================
+    
+    // DEPRECATED: Static mock data from early development. Still used as offline fallback
+    // for these 3 words. Remove once all data comes from API. Only referenced in WordStore.get().
+    const dictionaryData = {
+      '冒険': {
+        kanji: '冒険',
+        hiragana: 'ぼうけん',
+        romaji: 'bou-ken',
+        english: 'adventure',
+        partOfSpeech: 'noun, suru verb',
+        definition: "An exciting or daring experience involving risk or the unknown. Use when describing journeys, challenges, or trying something new and uncertain.",
+        contextUsage: { daily: 2, media: 3, business: 1, academic: 0 },
+        jlpt: 'N3',
+        pitchAccent: [
+          { kana: 'ぼ', pitch: 0, romaji: 'bo' },
+          { kana: 'う', pitch: 1, romaji: 'u' },
+          { kana: 'け', pitch: 1, romaji: 'ke' },
+          { kana: 'ん', pitch: 1, romaji: 'n' }
+        ],
+        sentences: [
+          { id: 1, parts: [{ text: '新', reading: 'あたら' }, { text: 'しい' }, { text: '冒険', reading: 'ぼうけん', highlight: true }, { text: 'が' }, { text: '始', reading: 'はじ' }, { text: 'まる。' }], english: 'A new adventure begins.' },
+          { id: 2, parts: [{ text: '子供', reading: 'こども' }, { text: 'の' }, { text: '頃', reading: 'ころ' }, { text: '、' }, { text: '冒険', reading: 'ぼうけん', highlight: true }, { text: 'が' }, { text: '大好', reading: 'だいす' }, { text: 'きだった。' }], english: 'As a child, I loved adventures.' },
+          { id: 3, parts: [{ text: 'この' }, { text: '旅', reading: 'たび' }, { text: 'は' }, { text: '大', reading: 'おお' }, { text: 'きな' }, { text: '冒険', reading: 'ぼうけん', highlight: true }, { text: 'だ。' }], english: 'This trip is a big adventure.' }
+        ],
+        kanjiDetails: [
+          { kanji: '冒', meaning: 'risk, brave, challenge', strokeCount: 9 },
+          { kanji: '険', meaning: 'steep, dangerous, harsh', strokeCount: 11 }
+        ]
+      },
+      '食べる': {
+        kanji: '食べる',
+        hiragana: 'たべる',
+        romaji: 'ta-be-ru',
+        english: 'to eat',
+        partOfSpeech: 'ichidan verb',
+        definition: "To eat or consume food. One of the most essential daily verbs in Japanese.",
+        contextUsage: { daily: 3, media: 2, business: 1, academic: 1 },
+        jlpt: 'N5',
+        pitchAccent: [
+          { kana: 'た', pitch: 0, romaji: 'ta' },
+          { kana: 'べ', pitch: 1, romaji: 'be' },
+          { kana: 'る', pitch: 0, romaji: 'ru' }
+        ],
+        sentences: [
+          { id: 1, parts: [{ text: '朝', reading: 'あさ' }, { text: 'ごはんを' }, { text: '食', reading: 'た', highlight: true }, { text: 'べる', highlight: true }, { text: '。' }], english: 'I eat breakfast.' },
+          { id: 2, parts: [{ text: '何', reading: 'なに' }, { text: 'を' }, { text: '食', reading: 'た', highlight: true }, { text: 'べたい', highlight: true }, { text: '？' }], english: 'What do you want to eat?' },
+          { id: 3, parts: [{ text: 'もう' }, { text: '食', reading: 'た', highlight: true }, { text: 'べました', highlight: true }, { text: '。' }], english: 'I already ate.' }
+        ],
+        kanjiDetails: [
+          { kanji: '食', meaning: 'eat, food, meal', strokeCount: 9 }
+        ]
+      },
+      '勉強': {
+        kanji: '勉強',
+        hiragana: 'べんきょう',
+        romaji: 'ben-kyou',
+        english: 'study',
+        partOfSpeech: 'noun, suru verb',
+        definition: "Study or learning. Used for academic study, practice, or the act of learning something new.",
+        contextUsage: { daily: 2, media: 1, business: 1, academic: 3 },
+        jlpt: 'N5',
+        pitchAccent: [
+          { kana: 'べ', pitch: 0, romaji: 'be' },
+          { kana: 'ん', pitch: 1, romaji: 'n' },
+          { kana: 'きょ', pitch: 1, romaji: 'kyo' },
+          { kana: 'う', pitch: 1, romaji: 'u' }
+        ],
+        sentences: [
+          { id: 1, parts: [{ text: '日本語', reading: 'にほんご' }, { text: 'を' }, { text: '勉強', reading: 'べんきょう', highlight: true }, { text: 'する。' }], english: 'I study Japanese.' },
+          { id: 2, parts: [{ text: '毎日', reading: 'まいにち' }, { text: '勉強', reading: 'べんきょう', highlight: true }, { text: 'しています。' }], english: 'I study every day.' },
+          { id: 3, parts: [{ text: '勉強', reading: 'べんきょう', highlight: true }, { text: 'は' }, { text: '大切', reading: 'たいせつ' }, { text: 'だ。' }], english: 'Studying is important.' }
+        ],
+        kanjiDetails: [
+          { kanji: '勉', meaning: 'exertion, endeavor', strokeCount: 10 },
+          { kanji: '強', meaning: 'strong, powerful', strokeCount: 11 }
+        ]
+      }
+    };
+    
+    // Word Store - manages captured words with localStorage persistence
+    const WordStore = {
+      STORAGE_KEY: 'wordHunter_capturedWords',
+      
+      // Load from localStorage
+      load: () => {
+        try {
+          const stored = localStorage.getItem(WordStore.STORAGE_KEY);
+          return stored ? JSON.parse(stored) : {};
+        } catch (e) {
+          console.error('Failed to load word store:', e);
+          return {};
+        }
+      },
+      
+      // Save to localStorage
+      save: (words) => {
+        try {
+          localStorage.setItem(WordStore.STORAGE_KEY, JSON.stringify(words));
+        } catch (e) {
+          console.error('Failed to save word store:', e);
+        }
+      },
+      
+      // Generate rubyParts from kanji string + hiragana reading
+      // Uses kana characters as anchors, then splits consecutive kanji runs
+      // using the kanji readings dictionary for accurate per-character assignment
+      generateRubyParts: (kanji, hiragana) => {
+        if (!kanji || !hiragana) return [];
+        try {
+        const isKanji = (c) => /[\u4e00-\u9faf\u3400-\u4dbf]/.test(c);
+        const isKana = (c) => /[\u3040-\u309f\u30a0-\u30ff]/.test(c);
+        const toHiragana = c => c.charCodeAt(0) >= 0x30A0 && c.charCodeAt(0) <= 0x30FF ? String.fromCharCode(c.charCodeAt(0) - 0x60) : c;
+        
+        const chars = [...kanji];
+        const rc = [...hiragana];
+        
+        // If word is entirely kana, no ruby needed
+        if (chars.every(c => isKana(c))) {
+          return chars.map(c => ({ base: c }));
+        }
+        
+        // Split word into runs of kanji vs kana
+        const segments = [];
+        let cur = { chars: '', type: null };
+        for (const ch of chars) {
+          const type = isKanji(ch) ? 'kanji' : 'kana';
+          if (type !== cur.type && cur.chars) { segments.push({ ...cur }); cur = { chars: '', type: null }; }
+          cur.chars += ch; cur.type = type;
+        }
+        if (cur.chars) segments.push(cur);
+        
+        // Walk segments and reading in parallel, using kana as anchors
+        let ri = 0;
+        const parts = [];
+        
+        for (let si = 0; si < segments.length; si++) {
+          const seg = segments[si];
+          if (seg.type === 'kana') {
+            const sc = [...seg.chars];
+            for (const ch of sc) {
+              parts.push({ base: ch });
+            }
+            ri += sc.length;
+          } else {
+            // Kanji segment: find where the next kana anchor starts in the reading
+            const nextKanaSeg = segments.slice(si + 1).find(s => s.type === 'kana');
+            let readingEnd;
+            
+            if (nextKanaSeg) {
+              const anchor = toHiragana([...nextKanaSeg.chars][0]);
+              // Start searching after at least 1 reading char per kanji in this segment
+              const minReading = [...seg.chars].length;
+              readingEnd = ri + minReading;
+              while (readingEnd < rc.length && toHiragana(rc[readingEnd]) !== anchor) readingEnd++;
+            } else {
+              readingEnd = rc.length;
+            }
+            
+            const kanjiChars = [...seg.chars];
+            const readingSlice = rc.slice(ri, readingEnd).join('');
+            
+            if (kanjiChars.length === 1) {
+              parts.push({ base: kanjiChars[0], ruby: readingSlice });
+            } else {
+              // Multiple consecutive kanji — use readings dictionary to split
+              const split = WordStore.splitKanjiReading(kanjiChars, readingSlice);
+              parts.push(...split);
+            }
+            ri = readingEnd;
+          }
+        }
+        
+        return parts;
+        } catch(e) {
+          console.error('[generateRubyParts] Error for', kanji, hiragana, e);
+          return [];
+        }
+      },
+      // e.g. ["連","続","最","適","化"], "れんぞくさいてきか"
+      //   → [{base:"連",ruby:"れん"}, {base:"続",ruby:"ぞく"}, ...]
+      // Uses backtracking: try each kanji's known readings, see if they match
+      // the start of the remaining hiragana, and recurse.
+      splitKanjiReading: (kanjiChars, reading) => {
+        const db = getReadingsDB();
+        
+        // Recursive solver with memoization
+        const solve = (ki, ri) => {
+          // Base case: consumed all kanji
+          if (ki === kanjiChars.length) {
+            return ri === reading.length ? [] : null; // must also consume all reading
+          }
+          // No reading left but kanji remain
+          if (ri >= reading.length) return null;
+          
+          const kanjiChar = kanjiChars[ki];
+          const remaining = reading.slice(ri);
+          
+          // Get known readings from dictionary
+          const knownReadings = db ? db[kanjiChar] : null;
+          
+          if (knownReadings) {
+            // Sort by length descending to prefer longer matches first
+            const sorted = [...knownReadings].sort((a, b) => b.length - a.length);
+            for (const r of sorted) {
+              if (remaining.startsWith(r)) {
+                const rest = solve(ki + 1, ri + r.length);
+                if (rest !== null) {
+                  return [{ base: kanjiChar, ruby: r }, ...rest];
+                }
+              }
+            }
+          }
+          
+          // Dictionary miss or no match: if last kanji, take all remaining reading
+          if (ki === kanjiChars.length - 1) {
+            return [{ base: kanjiChar, ruby: remaining }];
+          }
+          
+          // Try brute-force: prefer 2 chars (typical on'yomi), then 1, 3, 4
+          for (const len of [2, 1, 3, 4]) {
+            if (len > remaining.length) continue;
+            const tryReading = remaining.slice(0, len);
+            const rest = solve(ki + 1, ri + len);
+            if (rest !== null) {
+              return [{ base: kanjiChar, ruby: tryReading }, ...rest];
+            }
+          }
+          
+          return null; // no valid split found
+        };
+        
+        const result = solve(0, 0);
+        if (result) return result;
+        
+        // Ultimate fallback: emit as single group
+        return [{ base: kanjiChars.join(''), ruby: reading }];
+      },
+      
+      // Ensure word data has all required fields with safe defaults
+      normalize: (data) => {
+        if (!data) return data;
+        
+        // Always generate rubyParts from kanji + hiragana (more accurate than API)
+        const rubyParts = (data.kanji && data.hiragana)
+          ? WordStore.generateRubyParts(data.kanji, data.hiragana)
+          : [];
+        // rubyParts generated from kanji + hiragana
+        
+        // Retroactively look up Kanjium pitch for old words that used AI pitch
+        let pitchAccent = data.pitchAccent || [];
+        let pitchSource = data.pitchSource || null;
+        if (pitchSource !== 'kanjium' && data.kanji && data.hiragana) {
+          const kanjiumPitch = lookupPitchAccent(data.kanji, data.hiragana);
+          if (kanjiumPitch) {
+            pitchAccent = kanjiumPitch;
+            pitchSource = 'kanjium';
+          }
+        }
+        
+        // Sanitize AI pitchAccent: merge incorrectly split compound morae
+        // e.g. し,ょ,う → しょ,う  (small kana should merge with preceding consonant)
+        if (pitchAccent.length > 0) {
+          const smallKana = /^[ゃゅょャュョァィゥェォ]$/;
+          const fixed = [];
+          for (let i = 0; i < pitchAccent.length; i++) {
+            const next = pitchAccent[i + 1];
+            if (next && smallKana.test(next.kana)) {
+              // Merge: take current's pitch, combine kana and romaji
+              fixed.push({
+                kana: pitchAccent[i].kana + next.kana,
+                pitch: pitchAccent[i].pitch,
+                romaji: moraToRomaji(pitchAccent[i].kana + next.kana) || (pitchAccent[i].romaji + next.romaji)
+              });
+              i++; // skip next
+            } else {
+              fixed.push(pitchAccent[i]);
+            }
+          }
+          pitchAccent = fixed;
+        }
+        
+        return {
+          kanji: data.kanji || '?',
+          hiragana: data.hiragana || '',
+          romaji: data.romaji || '—',
+          english: data.english || '',
+          partOfSpeech: data.partOfSpeech || 'unknown',
+          definition: data.definition || (data.definitions && data.definitions[0] ? data.definitions[0].definition : ''),
+          definitions: data.definitions || (data.definition ? [{ rank: 'primary', frequency: 'common', meaning: data.english || '', definition: data.definition }] : []),
+          jlpt: lookupJlptLevel(data.kanji, data.hiragana) || data.jlpt || '?',
+          rubyParts: rubyParts || [],
+          contextUsage: data.contextUsage || { daily: 0, media: 0, business: 0, academic: 0 },
+          pitchAccent,
+          pitchSource,
+          sentences: data.sentences || [],
+          kanjiDetails: data.kanjiDetails || [],
+          capturedAt: data.capturedAt || new Date().toISOString(),
+          isPlaceholder: data.isPlaceholder || false,
+          isPartial: data.isPartial || false,
+          fetchedAt: data.fetchedAt || null
+        };
+      },
+      
+      // Get a word (from dictionary, then store, then create placeholder)
+      get: (word, store) => {
+        // First check dictionary
+        if (dictionaryData[word]) {
+          return { data: WordStore.normalize(dictionaryData[word]), source: 'dictionary' };
+        }
+        // Then check stored words
+        if (store[word]) {
+          return { data: WordStore.normalize(store[word]), source: 'stored' };
+        }
+        // Return null to signal we need to fetch/create
+        return { data: null, source: 'new' };
+      },
+      
+      // Fetch word data progressively: core first, extended in background
+      fetchOrCreateWord: async (word, apiKey, onCoreReady, sourceContext) => {
+        console.log(`[WordStore] fetchOrCreateWord("${word}")${sourceContext ? ' from: ' + sourceContext : ''}, API key: ${apiKey ? 'YES (' + apiKey.substring(0, 10) + '...)' : 'MISSING'}`);
+        
+        if (!apiKey) {
+          console.warn('[WordStore] No API key — falling back to placeholder');
+          return WordStore.createPlaceholder(word);
+        }
+        
+        // Try Phase 1: core data (kanji, reading, definition)
+        console.log('[WordStore] Phase 1: fetching core data...');
+        const coreData = await fetchCoreData(word, apiKey, sourceContext);
+        console.log('[WordStore] Phase 1 result:', coreData ? 'SUCCESS' : 'FAILED');
+        
+        if (coreData) {
+          // Try Kanjium pitch accent lookup (instant, authoritative)
+          const kanjiumPitch = lookupPitchAccent(coreData.kanji || word, coreData.hiragana || '');
+          if (kanjiumPitch) console.log('[WordStore] Kanjium pitch found:', coreData.kanji);
+          
+          // Build partial word with placeholder extended data
+          const partialWord = {
+            ...coreData,
+            contextUsage: coreData.contextUsage || { daily: 1, media: 1, business: 0, academic: 0 },
+            pitchAccent: kanjiumPitch || [],
+            pitchSource: kanjiumPitch ? 'kanjium' : null,
+            sentences: [],
+            kanjiDetails: [],
+            fetchedAt: new Date().toISOString(),
+            isPlaceholder: false,
+            isPartial: true
+          };
+          
+          // Deliver core data immediately (with Kanjium pitch if available!)
+          if (onCoreReady) onCoreReady(WordStore.normalize(partialWord));
+          
+          // Phase 2: fetch extended data in background
+          // Skip pitch in Claude call if Kanjium already has it
+          console.log('[WordStore] Phase 2: fetching extended data...' + (kanjiumPitch ? ' (skipping pitch — Kanjium has it)' : ''));
+          const japaneseWord = coreData.kanji || word;
+          const extData = await fetchExtendedData(japaneseWord, apiKey, !!kanjiumPitch, coreData.jlpt, coreData.definitions || []);
+          console.log('[WordStore] Phase 2 result:', extData ? 'SUCCESS' : 'FAILED');
+          
+          if (extData) {
+            // Kanjium pitch takes priority over Claude's pitch data
+            const finalPitch = kanjiumPitch || extData.pitchAccent || partialWord.pitchAccent;
+            const finalPitchSource = kanjiumPitch ? 'kanjium' : (extData.pitchAccent ? 'ai' : null);
+            
+            return WordStore.normalize({
+              ...partialWord,
+              pitchAccent: finalPitch,
+              pitchSource: finalPitchSource,
+              sentences: extData.sentences || partialWord.sentences,
+              kanjiDetails: extData.kanjiDetails || partialWord.kanjiDetails,
+              isPartial: false
+            });
+          }
+          return WordStore.normalize({ ...partialWord, isPartial: false });
+        }
+        // Fall back to placeholder
+        console.warn('[WordStore] Both phases failed — using placeholder');
+        return WordStore.createPlaceholder(word);
+      },
+      
+      // Create placeholder for unknown word
+      createPlaceholder: (capturedWord) => {
+        const chars = capturedWord.split('').filter(c => c.match(/[\u4e00-\u9faf]/));
+        
+        // Create kanji details placeholder
+        const kanjiDetails = chars.length > 0 
+          ? chars.map(c => ({
+              kanji: c,
+              meaning: 'Meaning not yet loaded',
+              strokeCount: Math.floor(Math.random() * 10) + 5
+            }))
+          : [{
+              kanji: capturedWord[0] || '?',
+              meaning: 'Meaning not yet loaded',
+              strokeCount: 1
+            }];
+        
+        const pitchAccent = capturedWord.split('').map((c, i) => ({
+          kana: c,
+          pitch: i === 0 ? 0 : 1,
+          romaji: '—'
+        }));
+        
+        // Create placeholder sentences using the captured word
+        const sentences = [
+          { 
+            id: 1, 
+            parts: [
+              { text: capturedWord, highlight: true },
+              { text: 'を使います。' }
+            ], 
+            english: `Using "${capturedWord}".`
+          },
+          { 
+            id: 2, 
+            parts: [
+              { text: 'これは' },
+              { text: capturedWord, highlight: true },
+              { text: 'です。' }
+            ], 
+            english: `This is "${capturedWord}".`
+          },
+          { 
+            id: 3, 
+            parts: [
+              { text: capturedWord, highlight: true },
+              { text: 'の意味は？' }
+            ], 
+            english: `What does "${capturedWord}" mean?`
+          }
+        ];
+        
+        return {
+          kanji: capturedWord,
+          hiragana: capturedWord,
+          romaji: '—',
+          english: 'Translation pending...',
+          definition: `"${capturedWord}" — This word was captured but full dictionary data hasn't been loaded yet. In the full app, this would be fetched from a Japanese dictionary API.`,
+          contextUsage: { daily: 1, media: 1, business: 0, academic: 0 },
+          jlpt: '?',
+          pitchAccent: pitchAccent,
+          sentences: sentences,
+          kanjiDetails: kanjiDetails,
+          capturedAt: new Date().toISOString(),
+          isPlaceholder: true
+        };
+      },
+      
+      // Add or update a word in the store
+      addWord: (word, data, store) => {
+        const newStore = { ...store, [word]: { ...data, capturedAt: data.capturedAt || new Date().toISOString() } };
+        WordStore.save(newStore);
+        return newStore;
+      },
+      
+      // Get all captured words
+      getAllWords: (store) => {
+        return Object.keys(store).map(key => ({
+          word: key,
+          ...store[key]
+        }));
+      },
+      
+      // Clear all stored words
+      clear: () => {
+        localStorage.removeItem(WordStore.STORAGE_KEY);
+        return {};
+      }
+    };
+
+    // ============================================
+    // HELPER COMPONENTS
+    // ============================================
+    
+    // Ruby display: kanji with furigana properly aligned above each character
+    const RubyDisplay = ({ rubyParts, kanji, hiragana, fontSize }) => {
+      const size = fontSize || 68;
+      const rubySize = Math.max(11, Math.round(size * 0.2));
+      
+      // If we have rubyParts, use proper ruby tags
+      if (rubyParts && rubyParts.length > 0) {
+        return (
+          <div style={{ 
+            color: '#000', fontSize: `${size}px`, fontWeight: '400', lineHeight: 1.2, 
+            fontFamily: "'Noto Serif JP', serif", textAlign: 'center',
+            rubyPosition: 'over'
+          }}>
+            {rubyParts.map((part, i) => (
+              part.ruby ? (
+                <ruby key={i} style={{ rubyAlign: 'center' }}>
+                  {part.base}
+                  <rp>(</rp>
+                  <rt style={{ fontSize: `${rubySize}px`, fontWeight: '400', color: 'rgba(0,0,0,0.5)', fontFamily: '-apple-system, sans-serif' }}>
+                    {part.ruby}
+                  </rt>
+                  <rp>)</rp>
+                </ruby>
+              ) : (
+                <span key={i}>{part.base}</span>
+              )
+            ))}
+          </div>
+        );
+      }
+      
+      // Fallback: show hiragana above as before
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={{ color: 'rgba(0,0,0,0.5)', fontSize: `${rubySize}px`, fontWeight: '400', marginBottom: '2px' }}>{hiragana}</div>
+          <div style={{ color: '#000', fontSize: `${size}px`, fontWeight: '400', lineHeight: 1, fontFamily: "'Noto Serif JP', serif" }}>{kanji}</div>
+        </div>
+      );
+    };
+    
+    // Helper to check if text contains kanji
+    const FuriganaText = ({ parts }) => (
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '1px', lineHeight: 1.2 }}>
+        {parts.map((part, i) => {
+          const showReading = part.reading && part.reading !== part.text;
+          return (
+            <span key={i} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', position: 'relative', marginTop: showReading ? '14px' : '0' }}>
+              {showReading && (
+                <span style={{ fontSize: '10px', color: part.highlight ? '#ff3366' : 'rgba(0,0,0,0.5)', lineHeight: 1 }}>
+                  {part.reading}
+                </span>
+              )}
+              <span style={{ fontSize: '18px', fontWeight: part.highlight ? '700' : '500', color: part.highlight ? '#ff3366' : '#000', lineHeight: 1.2 }}>
+                {part.text}
+              </span>
+            </span>
+          );
+        })}
+      </div>
+    );
+
+    // ============================================
+    // TAG COMPONENTS
+    // ============================================
+    
+    const tagExplanations = {
+      'N1': 'JLPT N1 — advanced vocabulary for fluent speakers.',
+      'N2': 'JLPT N2 — upper intermediate vocabulary.',
+      'N3': 'JLPT N3 — intermediate vocabulary, ~1-2 years study.',
+      'N4': 'JLPT N4 — basic vocabulary, ~6 months study.',
+      'N5': 'JLPT N5 — beginner vocabulary.'
+    };
+    
+    const contextExplanations = {
+      daily: {
+        0: 'Not appropriate for casual speech.',
+        1: 'Usable but slightly formal for casual speech.',
+        2: 'Natural in everyday conversation.',
+        3: 'Natural in everyday conversation.'
+      },
+      media: {
+        0: 'Not typical in entertainment media.',
+        1: 'Might appear in some anime or TV.',
+        2: 'Fits naturally in anime, manga, TV.',
+        3: 'Fits naturally in anime, manga, TV.'
+      },
+      business: {
+        0: 'Not suitable for workplace settings.',
+        1: 'Acceptable but informal for work.',
+        2: 'Appropriate in professional settings.',
+        3: 'Appropriate in professional settings.'
+      },
+      academic: {
+        0: 'Not suited for formal writing.',
+        1: 'Acceptable in some formal contexts.',
+        2: 'Appropriate for academic writing.',
+        3: 'Appropriate for academic writing.'
+      }
+    };
+    
+    const Tag = ({ label, color, explanation, small }) => {
+      const [isHovered, setIsHovered] = useState(false);
+      return (
+        <div style={{ position: 'relative' }}>
+          <span
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+            style={{
+              background: color,
+              color: '#fff',
+              fontSize: small ? '9px' : '10px',
+              fontWeight: '800',
+              padding: small ? '4px 10px' : '5px 12px',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              transform: isHovered ? 'translateY(-2px)' : 'translateY(0)',
+              display: 'inline-block',
+              boxShadow: isHovered ? '0 4px 8px rgba(0,0,0,0.2)' : 'none'
+            }}
+          >
+            {label}
+          </span>
+          {isHovered && (
+            <div style={{
+              position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
+              marginTop: '8px', background: '#1a1a2e', color: '#fff', fontSize: '11px',
+              lineHeight: 1.4, padding: '10px 12px', borderRadius: '8px', width: '180px',
+              zIndex: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+            }}>
+              <div style={{
+                position: 'absolute', top: '-6px', left: '50%', transform: 'translateX(-50%)',
+                width: 0, height: 0, borderLeft: '6px solid transparent',
+                borderRight: '6px solid transparent', borderBottom: '6px solid #1a1a2e'
+              }}/>
+              {explanation}
+            </div>
+          )}
+        </div>
+      );
+    };
+    
+    const ContextTag = ({ context, usageLevel }) => {
+      const [isHovered, setIsHovered] = useState(false);
+      const labels = { daily: 'Daily', media: 'Media', business: 'Business', academic: 'Academic' };
+      const text = labels[context];
+      const explanation = contextExplanations[context]?.[usageLevel] || '';
+      
+      // Tiered styling based on usage level
+      const styles = {
+        3: { bg: '#ecfdf5', border: '#34d399', color: 'rgba(0,0,0,0.85)', fontWeight: '600' },
+        2: { bg: '#f0fdf4', border: '#b5e8c9', color: 'rgba(0,0,0,0.55)', fontWeight: '500' },
+        1: { bg: '#f9fafb', border: '#d1d5db', color: 'rgba(0,0,0,0.5)', fontWeight: '500' },
+        0: { bg: '#f5f5f5', border: '#e8b4b4', color: 'rgba(180,100,100,0.35)', fontWeight: '500' }
+      };
+      const s = styles[usageLevel] || styles[0];
+      
+      return (
+        <div style={{ position: 'relative' }}>
+          <span
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+            style={{
+              background: s.bg,
+              border: `1.5px solid ${s.border}`,
+              borderRadius: '20px',
+              padding: '4px 12px',
+              fontSize: '10px',
+              fontWeight: s.fontWeight,
+              color: s.color,
+              cursor: 'default',
+              display: 'inline-block',
+              transition: 'all 0.15s ease',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {text}
+          </span>
+          {isHovered && (
+            <div style={{
+              position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+              marginBottom: '8px', background: '#1a1a2e', color: '#fff', fontSize: '11px',
+              lineHeight: 1.4, padding: '10px 12px', borderRadius: '8px', width: '180px',
+              zIndex: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.3)', textAlign: 'center'
+            }}>
+              {explanation}
+              <div style={{
+                position: 'absolute', bottom: '-6px', left: '50%', transform: 'translateX(-50%)',
+                width: 0, height: 0, borderLeft: '6px solid transparent',
+                borderRight: '6px solid transparent', borderTop: '6px solid #1a1a2e'
+              }}/>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // ============================================
+    // TAB COMPONENTS
+    // ============================================
+    
+    const DefineTab = ({ word }) => {
+      const jlptColors = { 'N5': '#4ade80', 'N4': '#a3e635', 'N3': '#f59e0b', 'N2': '#f472b6', 'N1': '#ef4444' };
+      const jlptColor = jlptColors[word.jlpt] || '#888';
+      const ctx = word.contextUsage || { daily: 0, media: 0, business: 0, academic: 0 };
+      const defs = word.definitions || [];
+      const [expandedDefs, setExpandedDefs] = useState({});
+      
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {defs.length > 0 ? defs.map((d, i) => {
+              const isRare = d.frequency === 'rare';
+              const isUncommon = d.frequency === 'uncommon';
+              const isFaded = isRare || isUncommon;
+              const isCollapsed = i > 0 && !expandedDefs[i];
+              return (
+                <div key={i}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                    <span style={{ fontSize: '14px', fontWeight: '600', color: isRare ? '#aaa' : isUncommon ? '#999' : '#1a1a1a' }}>{d.meaning}</span>
+                    {isUncommon && (
+                      <span style={{
+                        fontSize: '9px', fontWeight: '700', letterSpacing: '0.2px',
+                        textTransform: 'uppercase', padding: '2px 8px', borderRadius: '10px',
+                        lineHeight: '14px', whiteSpace: 'nowrap',
+                        background: '#fef9c3', color: '#ca8a04'
+                      }}>Uncommon</span>
+                    )}
+                    {isRare && (
+                      <span style={{
+                        fontSize: '9px', fontWeight: '700', letterSpacing: '0.2px',
+                        textTransform: 'uppercase', padding: '2px 8px', borderRadius: '10px',
+                        lineHeight: '14px', whiteSpace: 'nowrap',
+                        background: '#fef2f2', color: '#b45309'
+                      }}>Rare</span>
+                    )}
+                  </div>
+                  {isCollapsed ? (
+                    <button
+                      onClick={() => setExpandedDefs(prev => ({ ...prev, [i]: true }))}
+                      style={{
+                        background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0',
+                        fontSize: '12px', color: '#999', fontStyle: 'italic'
+                      }}
+                    >Show definition ›</button>
+                  ) : (
+                    <div style={{ fontSize: '13px', lineHeight: 1.6, color: isRare ? '#bbb' : isUncommon ? '#999' : '#444' }}>{d.definition}</div>
+                  )}
+                </div>
+              );
+            }) : (
+              <div style={{ fontSize: '14px', lineHeight: 1.7, color: '#333' }}>{word.definition || 'Definition loading...'}</div>
+            )}
+          </div>
+          <div style={{ height: '1px', background: 'linear-gradient(90deg, transparent, rgba(0,0,0,0.1), transparent)', margin: '4px 0' }}/>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {['daily', 'media', 'business', 'academic'].map(c => {
+              const level = ctx[c] || 0;
+              if (level !== 0 && level !== 3) return null;
+              return <ContextTag key={c} context={c} usageLevel={level} />;
+            })}
+          </div>
+        </div>
+      );
+    };
+    
+    const ExamplesTab = ({ word }) => {
+      const sentences = word.sentences || [];
+      const defs = word.definitions || [];
+      
+      if (sentences.length === 0) {
+        return (
+          <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
+            <p style={{ fontSize: '14px', fontWeight: '600' }}>No examples available yet</p>
+            <p style={{ fontSize: '12px', marginTop: '8px' }}>Examples may still be loading</p>
+          </div>
+        );
+      }
+      
+      // Build one group per definition by matching sentences via defMeaning
+      const groups = [];
+      if (defs.length > 1) {
+        const used = new Set();
+        // First pass: exact match on defMeaning to definition meaning
+        defs.forEach((d) => {
+          const matching = [];
+          sentences.forEach((s, si) => {
+            if (used.has(si) || !s.defMeaning) return;
+            const dm = s.defMeaning.toLowerCase().trim();
+            const defM = d.meaning.toLowerCase().trim();
+            // Exact match or one contains the other
+            if (dm === defM || dm.includes(defM) || defM.includes(dm)) {
+              matching.push(s);
+              used.add(si);
+            }
+          });
+          groups.push({ def: d, sentences: matching });
+        });
+        // Second pass: keyword match for any still unmatched
+        sentences.forEach((s, si) => {
+          if (used.has(si) || !s.defMeaning) return;
+          const dm = s.defMeaning.toLowerCase();
+          for (let g = 0; g < groups.length; g++) {
+            const keywords = groups[g].def.meaning.toLowerCase().split(/[\s\/,]+/).filter(w => w.length > 2);
+            if (keywords.some(kw => dm.includes(kw))) {
+              groups[g].sentences.push(s);
+              used.add(si);
+              break;
+            }
+          }
+        });
+        // Third pass: distribute any remaining unmatched round-robin
+        const unmatched = sentences.filter((_, si) => !used.has(si));
+        unmatched.forEach((s, i) => {
+          const emptyGroup = groups.find(g => g.sentences.length === 0);
+          if (emptyGroup) {
+            emptyGroup.sentences.push(s);
+          } else {
+            groups[i % groups.length].sentences.push(s);
+          }
+        });
+      } else {
+        // Single definition: all sentences, no cards
+        groups.push({ def: defs[0] || null, sentences });
+      }
+      
+      let counter = 0;
+      const multiDef = defs.length > 1;
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {groups.map((group, gi) => {
+            const d = group.def;
+            const isRare = d && d.frequency === 'rare';
+            const isUncommon = d && d.frequency === 'uncommon';
+            if (group.sentences.length === 0 && multiDef) return null;
+            return (
+              <div key={gi}>
+                {multiDef && d && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', marginTop: gi > 0 ? '16px' : '0' }}>
+                    <span style={{ fontSize: '10px', fontWeight: '600', color: isRare ? '#bbb' : isUncommon ? '#aaa' : '#888' }}>{d.meaning}</span>
+                    {isUncommon && (
+                      <span style={{
+                        fontSize: '9px', fontWeight: '700', letterSpacing: '0.2px',
+                        textTransform: 'uppercase', padding: '2px 8px', borderRadius: '10px',
+                        lineHeight: '14px', whiteSpace: 'nowrap',
+                        background: '#fef9c3', color: '#ca8a04'
+                      }}>Uncommon</span>
+                    )}
+                    {isRare && (
+                      <span style={{
+                        fontSize: '9px', fontWeight: '700', letterSpacing: '0.2px',
+                        textTransform: 'uppercase', padding: '2px 8px', borderRadius: '10px',
+                        lineHeight: '14px', whiteSpace: 'nowrap',
+                        background: '#fef2f2', color: '#b45309'
+                      }}>Rare</span>
+                    )}
+                  </div>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {group.sentences.map((sentence, si) => {
+                    counter++;
+                    return (
+                      <div key={sentence.id || counter} style={{
+                        background: '#f9f9f9', borderRadius: '10px', padding: '2px 12px 6px 12px',
+                        border: '1px solid #eee'
+                      }}>
+                        <FuriganaText parts={sentence.parts || []} />
+                        <div style={{ fontSize: '13px', color: '#666', marginTop: '4px' }}>{sentence.english || ''}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    };
+    
+    const PitchVisual = ({ pitchAccent, activeMora = -1 }) => {
+      if (!pitchAccent || pitchAccent.length < 2) {
+        return <div style={{ fontSize: '13px', color: '#999', textAlign: 'center', padding: '20px' }}>Pitch data not available</div>;
+      }
+
+      const count = pitchAccent.length;
+      const colW = 36;
+      const totalW = count * colW;
+      const highY = 14;
+      const lowY = 42;
+      const svgH = 56;
+
+      return (
+        <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center' }}>
+          <svg width={totalW} height={svgH}>
+            {pitchAccent.map((item, i) => {
+              if (i === count - 1) return null;
+              const x1 = i * colW + colW / 2;
+              const y1 = item.pitch === 1 ? highY : lowY;
+              const x2 = (i + 1) * colW + colW / 2;
+              const y2 = pitchAccent[i + 1].pitch === 1 ? highY : lowY;
+              const isActiveLine = i === activeMora || i + 1 === activeMora;
+              return <line key={`l${i}`} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#ff3366" strokeWidth="2.5" strokeLinecap="round"
+                style={{ opacity: activeMora >= 0 ? (isActiveLine ? 1 : 0.3) : 1, transition: 'opacity 0.1s' }} />;
+            })}
+            {pitchAccent.map((item, i) => {
+              const cx = i * colW + colW / 2;
+              const cy = item.pitch === 1 ? highY : lowY;
+              const isActive = i === activeMora;
+              const isPast = activeMora >= 0 && i < activeMora;
+              return (
+                <g key={`c${i}`}>
+                  {isActive && (
+                    <circle cx={cx} cy={cy} r="12" fill="none" stroke="#ff3366" strokeWidth="2"
+                      style={{ opacity: 0.4, animation: 'dotPulse 0.4s ease-out' }} />
+                  )}
+                  <circle cx={cx} cy={cy}
+                    r={isActive ? 7 : 5}
+                    fill="#ff3366"
+                    style={{
+                      opacity: activeMora >= 0 ? (isActive ? 1 : isPast ? 0.5 : 0.3) : 1,
+                      transition: 'opacity 0.1s',
+                    }}
+                  />
+                </g>
+              );
+            })}
+          </svg>
+          <div style={{ display: 'flex', width: totalW }}>
+            {pitchAccent.map((item, i) => {
+              const isActive = i === activeMora;
+              const isPast = activeMora >= 0 && i < activeMora;
+              return (
+                <div key={i} style={{
+                  width: colW, display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', gap: '1px',
+                  transition: 'opacity 0.1s',
+                  opacity: activeMora >= 0 ? (isActive ? 1 : isPast ? 0.5 : 0.35) : 1,
+                }}>
+                  <span style={{
+                    fontSize: '15px', fontWeight: isActive ? '800' : '600',
+                    color: isActive ? '#ff3366' : '#000',
+                    lineHeight: 1.2, whiteSpace: 'nowrap',
+                    transition: 'color 0.1s',
+                  }}>{item.kana}</span>
+                  <span style={{
+                    fontSize: '9px', fontWeight: '500',
+                    color: isActive ? 'rgba(255,51,102,0.6)' : 'rgba(0,0,0,0.3)',
+                    lineHeight: 1, transition: 'color 0.1s',
+                  }}>{item.romaji}</span>
+                </div>
+              );
+            })}
+          </div>
+          <style>{`
+            @keyframes dotPulse {
+              0% { r: 7; opacity: 0.6; }
+              100% { r: 14; opacity: 0; }
+            }
+          `}</style>
+        </div>
+      );
+    };
+    
+    const HearTab = ({ word, googleTTSKey }) => {
+      const [isPlaying, setIsPlaying] = useState(null);
+      const [activeMora, setActiveMora] = useState(-1);
+      const animFrameRef = useRef(null);
+      
+      const handlePlay = async (speed) => {
+        if (isPlaying) return;
+        setIsPlaying(speed);
+        const rate = speed === 'superslow' ? 0.45 : speed === 'slow' ? 0.7 : 1.0;
+        
+        // Try Google TTS — returns audio element
+        if (googleTTSKey) {
+          const audio = await playGoogleTTS(word.kanji, googleTTSKey, rate, word.hiragana);
+          if (audio) {
+            // Wait for duration metadata
+            await new Promise(resolve => {
+              if (audio.duration && audio.duration !== Infinity) resolve();
+              else audio.addEventListener('loadedmetadata', resolve, { once: true });
+            });
+            
+            const duration = audio.duration;
+            const timings = word.pitchAccent ? getMoraTimings(word.pitchAccent, duration) : [];
+            
+            audio.play();
+            const startTime = performance.now();
+            
+            if (timings.length > 0) {
+              const animate = () => {
+                const elapsed = (performance.now() - startTime) / 1000;
+                let current = -1;
+                for (let i = 0; i < timings.length; i++) {
+                  if (elapsed >= timings[i].start && elapsed < timings[i].start + timings[i].duration) {
+                    current = i;
+                    break;
+                  }
+                }
+                setActiveMora(current);
+                if (elapsed < duration) {
+                  animFrameRef.current = requestAnimationFrame(animate);
+                }
+              };
+              animFrameRef.current = requestAnimationFrame(animate);
+            }
+            
+            audio.onended = () => {
+              if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+              setActiveMora(-1);
+              setIsPlaying(null);
+            };
+            audio.onerror = () => {
+              if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+              setActiveMora(-1);
+              setIsPlaying(null);
+            };
+            return;
+          }
+          console.warn('[HearTab] Google TTS failed, falling back to browser');
+        }
+        
+        // Fallback: browser SpeechSynthesis (no pitch animation)
+        const utterance = new SpeechSynthesisUtterance(word.hiragana || word.kanji);
+        utterance.lang = 'ja-JP';
+        utterance.rate = speed === 'superslow' ? 0.3 : speed === 'slow' ? 0.5 : 1.0;
+        utterance.onend = () => setIsPlaying(null);
+        utterance.onerror = () => setIsPlaying(null);
+        speechSynthesis.speak(utterance);
+      };
+      
+      useEffect(() => () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); }, []);
+      
+      // Detect pitch pattern from data
+      const detectPitchPattern = (pitchAccent) => {
+        if (!pitchAccent || pitchAccent.length < 2) return { name: 'unknown', japanese: '不明', description: 'Pitch pattern could not be determined.' };
+        const pitches = pitchAccent.map(p => p.pitch);
+        const n = pitches.length;
+        
+        let dropAfter = -1;
+        for (let i = 0; i < n - 1; i++) {
+          if (pitches[i] === 1 && pitches[i + 1] === 0) { dropAfter = i; break; }
+        }
+        
+        if (dropAfter === 0) {
+          return { name: 'atamadaka', japanese: '頭高型', description: 'Starts high on the first mora, then drops and stays low. Emphasize the very first beat.' };
+        }
+        if (dropAfter === -1) {
+          if (pitches[0] === 0) {
+            return { name: 'heiban', japanese: '平板型', description: 'Starts low, rises after the first mora, and stays high — even when followed by a particle. Flat and even.' };
+          }
+          return { name: 'heiban', japanese: '平板型', description: 'Stays at a consistent pitch throughout.' };
+        }
+        if (dropAfter === n - 2) {
+          if (pitches[0] === 0) {
+            return { name: 'odaka', japanese: '尾高型', description: 'Starts low, rises, and stays high through the last mora — but drops when followed by a particle like は or が.' };
+          }
+        }
+        if (dropAfter >= 1) {
+          return { name: 'nakadaka', japanese: '中高型', description: `Starts low, rises, then drops after mora ${dropAfter + 1}. The pitch peaks in the middle of the word.` };
+        }
+        return { name: 'unknown', japanese: '不明', description: 'Pitch pattern could not be classified.' };
+      };
+      
+      const pattern = detectPitchPattern(word.pitchAccent);
+      
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          <div style={{ background: '#f8f8f8', borderRadius: '12px', padding: '20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', overflow: 'auto' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#888' }}>PITCH ACCENT</div>
+            <PitchVisual pitchAccent={word.pitchAccent} activeMora={activeMora} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
+            {['normal', 'slow', 'superslow'].map(speed => {
+              const active = isPlaying === speed;
+              const label = speed === 'superslow' ? '🐢🐢🐢' : speed === 'slow' ? 'Slow' : 'Listen';
+              const icon = speed === 'superslow' ? null : speed === 'slow' ? <span style={{ fontSize: '14px' }}>🐢</span> : (
+                active ? <span style={{ fontSize: '12px' }}>◼</span> : <svg width="14" height="14" viewBox="0 0 24 24" fill="rgba(0,0,0,0.7)"><polygon points="6,3 20,12 6,21" /></svg>
+              );
+              return (
+              <button key={speed} onClick={() => handlePlay(speed)}
+                onMouseEnter={e => { if (!isPlaying) { e.currentTarget.style.background = '#ffe600'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.15)'; }}}
+                onMouseLeave={e => { if (!isPlaying) { e.currentTarget.style.background = 'rgba(255,230,0,0.35)'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.08)'; }}}
+                style={{
+                background: active ? 'rgba(0,0,0,0.04)' : 'rgba(255,230,0,0.35)',
+                color: active ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.8)',
+                border: active ? '2px solid rgba(0,0,0,0.12)' : '2px solid rgba(0,0,0,0.08)',
+                borderRadius: '12px', padding: '10px 20px',
+                fontSize: '13px', fontWeight: '700', cursor: isPlaying ? 'default' : 'pointer',
+                display: 'flex', alignItems: 'center', gap: '8px',
+                transition: 'all 0.15s ease',
+                opacity: isPlaying && !active ? 0.4 : 1,
+                animation: active ? 'breathe 1.5s ease-in-out infinite' : 'none',
+              }}>
+                {icon}
+                {label}
+              </button>
+              );
+            })}
+            </div>
+          </div>
+          <div style={{ background: 'rgba(0, 0, 0, 0.03)', borderRadius: '8px', padding: '14px', fontSize: '12px', color: '#555', lineHeight: 1.6 }}>
+            This word has a <strong>{pattern.name} pitch pattern</strong> ({pattern.japanese}). {pattern.description}
+          </div>
+          {word.pitchSource && (
+            <div style={{ textAlign: 'center', fontSize: '10px', color: '#aaa' }}>
+              {word.pitchSource === 'kanjium' ? '📚 Pitch data from Kanjium dictionary (Wadoku)' : '🤖 AI-generated pitch (may be inaccurate)'}
+            </div>
+          )}
+          <style>{`
+            @keyframes breathe {
+              0%, 100% { opacity: 0.9; }
+              50% { opacity: 0.5; }
+            }
+          `}</style>
+        </div>
+      );
+    };
+    
+    const KanjiTab = ({ word, onCaptureKanji }) => {
+      const kanjiDetails = word.kanjiDetails || [];
+      if (kanjiDetails.length === 0) {
+        return (
+          <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
+            <p style={{ fontSize: '14px', fontWeight: '600' }}>No kanji breakdown available yet</p>
+            <p style={{ fontSize: '12px', marginTop: '8px' }}>Kanji details may still be loading</p>
+          </div>
+        );
+      }
+      
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {kanjiDetails.map((k, index) => (
+            <button
+              key={index}
+              onClick={() => onCaptureKanji && onCaptureKanji(k.kanji, word.kanji)}
+              style={{
+                background: '#fff', border: '2px solid #e5e5e5', borderRadius: '16px',
+                padding: '20px', cursor: 'pointer', textAlign: 'left',
+                display: 'flex', alignItems: 'center', gap: '20px',
+                transition: 'all 0.15s ease',
+                boxShadow: 'none'
+              }}
+              onMouseEnter={e => { e.currentTarget.style.border = '2px solid #000'; e.currentTarget.style.boxShadow = '3px 3px 0 #000'; e.currentTarget.style.transform = 'translate(-1px, -1px)'; }}
+              onMouseLeave={e => { e.currentTarget.style.border = '2px solid #e5e5e5'; e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'none'; }}
+            >
+              <div style={{
+                fontSize: '52px', fontWeight: '400', color: '#000',
+                fontFamily: "'Noto Serif JP', serif", lineHeight: 1,
+                flexShrink: 0, width: '70px', textAlign: 'center'
+              }}>
+                {k.kanji}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  fontSize: '15px', fontWeight: '600', color: '#000',
+                  fontFamily: "'Noto Serif JP', serif",
+                  marginBottom: '6px'
+                }}>
+                  {k.meaning}
+                </div>
+                <div style={{ fontSize: '11px', color: '#999' }}>
+                  {k.strokeCount} strokes · Tap to learn this kanji
+                </div>
+              </div>
+              <div style={{ fontSize: '18px', flexShrink: 0, color: '#ccc' }}>→</div>
+            </button>
+          ))}
+        </div>
+      );
+    };
+
+    // ============================================
+    // TAB LOADING SKELETON
+    // ============================================
+    
+    const TabLoading = ({ label }) => {
+      const [elapsed, setElapsed] = useState(0);
+      useEffect(() => {
+        const timer = setInterval(() => setElapsed(e => e + 1), 1000);
+        return () => clearInterval(timer);
+      }, []);
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '200px', gap: '16px' }}>
+          <div style={{
+            width: '32px', height: '32px', border: '3px solid rgba(0,0,0,0.1)',
+            borderTopColor: '#ff3366', borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite'
+          }}/>
+          <p style={{ fontSize: '13px', color: '#999', fontWeight: '600' }}>{label}</p>
+          <p style={{ fontSize: '11px', color: '#ccc' }}>{elapsed}s</p>
+          <style>{`
+            @keyframes spin { to { transform: rotate(360deg); } }
+          `}</style>
+        </div>
+      );
+    };
+
+    // ============================================
+    // WORD CARD
+    // ============================================
+    
+    const tabs = [
+      { id: 'define', label: 'Define' },
+      { id: 'examples', label: 'Examples' },
+      { id: 'hear', label: 'Hear' },
+      { id: 'kanji', label: 'Kanji' }
+    ];
+    
+    const JlptBadge = ({ jlpt, color }) => {
+      const [isHovered, setIsHovered] = useState(false);
+      const explanation = tagExplanations[jlpt] || 'JLPT level unknown.';
+      return (
+        <div
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          style={{ position: 'absolute', top: '-12px', left: '50%', transform: 'translateX(-50%)', zIndex: 10 }}
+        >
+          <div style={{ background: color, color: '#fff', fontSize: '9px', fontWeight: '800', padding: '4px 12px', borderRadius: '20px', border: '2px solid #fff', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', cursor: 'default' }}>{jlpt || '?'}</div>
+          {isHovered && (
+            <div style={{
+              position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
+              marginTop: '8px', background: '#1a1a2e', color: '#fff', fontSize: '11px',
+              lineHeight: 1.4, padding: '10px 12px', borderRadius: '8px', width: '200px',
+              zIndex: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.3)', textAlign: 'center', whiteSpace: 'normal'
+            }}>
+              {explanation}
+              <div style={{
+                position: 'absolute', top: '-6px', left: '50%', transform: 'translateX(-50%)',
+                width: 0, height: 0, borderLeft: '6px solid transparent',
+                borderRight: '6px solid transparent', borderBottom: '6px solid #1a1a2e'
+              }}/>
+            </div>
+          )}
+        </div>
+      );
+    };
+    
+    const WordCard = ({ word, googleTTSKey, onCaptureKanji, isPinned, onTogglePin }) => {
+      const [activeTab, setActiveTab] = useState('define');
+      const [showPinToast, setShowPinToast] = useState(false);
+      const [showRubyDebug, setShowRubyDebug] = useState(false);
+      const prevPinned = React.useRef(isPinned);
+      
+      React.useEffect(() => {
+        if (isPinned && !prevPinned.current) {
+          setShowPinToast(true);
+          const t = setTimeout(() => setShowPinToast(false), 1200);
+          return () => clearTimeout(t);
+        }
+        prevPinned.current = isPinned;
+      }, [isPinned]);
+      
+      const jlptBadgeColors = { 'N5': '#4ade80', 'N4': '#a3e635', 'N3': '#f59e0b', 'N2': '#f472b6', 'N1': '#ef4444' };
+      const jlptBadgeColor = jlptBadgeColors[word.jlpt] || '#888';
+      
+      // Dynamic font sizing: scale down for longer words
+      const charCount = [...(word.kanji || '')].length;
+      const displayKanji = charCount > 12 ? [...word.kanji].slice(0, 12).join('') + '…' : word.kanji;
+      const kanjiSize = charCount <= 4 ? 68 : charCount <= 6 ? 48 : charCount <= 8 ? 38 : charCount <= 12 ? 30 : 28;
+      
+      return (
+        <div style={{
+          width: '100%', maxWidth: '460px',
+          display: 'flex', flexDirection: 'column', position: 'relative',
+          fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif'
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: '20px', padding: '24px',
+            display: 'flex', 
+            flexDirection: 'column',
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            marginBottom: '12px', 
+            position: 'relative',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.08)'
+          }}>
+            <JlptBadge jlpt={word.jlpt} color={jlptBadgeColor} />
+            <div
+              onClick={() => setShowRubyDebug(!showRubyDebug)}
+              style={{
+                position: 'absolute', top: '-1px', left: '21px', zIndex: 10,
+                width: '14px', height: '22px',
+                background: showRubyDebug ? '#888' : '#fff',
+                clipPath: 'polygon(0 0, 100% 0, 100% 100%, 50% 75%, 0 100%)',
+                cursor: 'pointer',
+                transition: 'background 0.15s ease',
+              }}
+            />
+            {onTogglePin && (
+              <React.Fragment>
+              <div
+                onClick={() => onTogglePin(word.kanji)}
+                onMouseEnter={e => { if (!isPinned) e.currentTarget.style.background = '#b0b0b0'; }}
+                onMouseLeave={e => { if (!isPinned) e.currentTarget.style.background = '#d1d5db'; }}
+                style={{
+                  position: 'absolute', top: '-1px', right: '21px', zIndex: 10,
+                  width: '14px', height: '22px',
+                  background: isPinned ? '#f43f5e' : '#d1d5db',
+                  clipPath: 'polygon(0 0, 100% 0, 100% 100%, 50% 75%, 0 100%)',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s ease',
+                  boxShadow: isPinned ? '0 1px 4px rgba(244,63,94,0.3)' : 'none'
+                }}
+                title={isPinned ? 'Unpin word' : 'Pin word'}
+              />
+              {showPinToast && (
+                <div style={{
+                  position: 'absolute', top: '4px', right: '40px', zIndex: 11,
+                  background: '#f43f5e', color: '#fff', fontSize: '10px', fontWeight: '700',
+                  padding: '3px 8px', borderRadius: '4px', letterSpacing: '0.5px',
+                  animation: 'pinToastFade 1.2s ease-out forwards',
+                  pointerEvents: 'none',
+                }}>Pinned</div>
+              )}
+              </React.Fragment>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
+              <RubyDisplay rubyParts={word.rubyParts} kanji={displayKanji} hiragana={word.hiragana} fontSize={kanjiSize} />
+              {showRubyDebug && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: '0', right: '0', zIndex: 20,
+                  background: '#1a1a1a', borderRadius: '8px', padding: '10px',
+                  fontSize: '10px', fontFamily: 'monospace', color: '#4ade80', lineHeight: 1.6,
+                  maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <span style={{ color: '#ffe600', fontWeight: '700' }}>Ruby Debug</span>
+                    <button onClick={() => setShowRubyDebug(false)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+                  </div>
+                  <div style={{ color: '#888' }}>kanji: "{word.kanji}"</div>
+                  <div style={{ color: '#888' }}>hiragana: "{word.hiragana}"</div>
+                  <div style={{ color: '#888', marginBottom: '4px' }}>rubyParts: {word.rubyParts ? word.rubyParts.length + ' parts' : 'null'}</div>
+                  {word.rubyParts && word.rubyParts.map((p, i) => (
+                    <div key={i} style={{ color: p.ruby ? '#4ade80' : '#888' }}>
+                      [{i}] base: "{p.base}" {p.ruby ? `→ ruby: "${p.ruby}"` : '(no ruby)'}
+                    </div>
+                  ))}
+                  {!word.rubyParts && <div style={{ color: '#f87171' }}>No rubyParts — using fallback display</div>}
+                </div>
+              )}
+              <div style={{ color: 'rgba(0,0,0,0.4)', fontSize: '13px', marginTop: '6px', fontFamily: 'monospace', fontWeight: '400' }}>{word.romaji}</div>
+              <div style={{ color: '#000', fontSize: '18px', fontWeight: '600', textAlign: 'center', marginTop: '12px' }}>{word.english}</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '4px', position: 'relative', zIndex: 1 }}>
+            {tabs.map((tab) => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+                flex: 1, background: activeTab === tab.id ? '#fff' : 'rgba(255,255,255,0.4)',
+                color: activeTab === tab.id ? '#000' : 'rgba(0,0,0,0.4)',
+                border: 'none',
+                borderRadius: '10px 10px 0 0', padding: '8px 8px', fontSize: '12px', fontWeight: '700',
+                cursor: 'pointer', position: 'relative', zIndex: activeTab === tab.id ? 2 : 1,
+                boxShadow: activeTab === tab.id ? '0 -2px 8px rgba(0,0,0,0.05)' : 'none'
+              }}>{tab.label}</button>
+            ))}
+          </div>
+          <div style={{ background: '#fff', borderRadius: '0 0 20px 20px', padding: '20px', minHeight: '280px', position: 'relative', zIndex: 0, overflow: 'visible', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}>
+            <div style={{ display: activeTab === 'define' ? 'block' : 'none' }}>
+              <DefineTab word={word} />
+            </div>
+            <div style={{ display: activeTab === 'examples' ? 'block' : 'none' }}>
+              {word.isPartial ? <TabLoading label="Loading examples..." /> : <ExamplesTab word={word} />}
+            </div>
+            <div style={{ display: activeTab === 'hear' ? 'block' : 'none' }}>
+              {word.isPartial ? <TabLoading label="Loading pitch data..." /> : <HearTab word={word} googleTTSKey={googleTTSKey} />}
+            </div>
+            <div style={{ display: activeTab === 'kanji' ? 'block' : 'none' }}>
+              {word.isPartial ? <TabLoading label="Loading kanji details..." /> : <KanjiTab word={word} onCaptureKanji={onCaptureKanji} />}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // VOICE TIP MODAL (Option E)
+    // ============================================
+    
+    const VOICE_TIPS = [
+      { emoji: '🐢', text: 'Speak 2x <strong>slower</strong> than normal', sub: 'Voice capture works best with clear, deliberate speech' },
+      { emoji: '🔴', text: 'Wait for the red or blue pulse before speaking', sub: 'The mic needs a moment to initialize' },
+      { emoji: '📱', text: 'Hold the phone 6-8 inches from your mouth', sub: 'Too close or too far reduces accuracy' },
+      { emoji: '🤫', text: 'Reduce background noise if possible', sub: 'Quiet environments dramatically improve recognition' },
+      { emoji: '🔁', text: 'For short words, try saying it twice: "木、木"', sub: 'Repeating gives the recognizer more audio to work with' },
+    ];
+    
+    const VoiceTipModal = ({ onDismiss }) => {
+      const [index, setIndex] = useState(0);
+      const tip = VOICE_TIPS[index];
+      
+      return (
+        <div onClick={onDismiss} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
+          zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '24px',
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: '#fff', borderRadius: '20px', padding: '28px 24px',
+            width: '85%', maxWidth: '300px', textAlign: 'center',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+          }}>
+            <div style={{ fontSize: '40px', marginBottom: '12px' }}>{tip.emoji}</div>
+            <div style={{ fontSize: '16px', color: '#1a1a1a', fontWeight: '500', lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: tip.text }} />
+            <div style={{ fontSize: '11px', color: '#aaa', marginTop: '8px' }}>{tip.sub}</div>
+            
+            {/* Dots */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginTop: '16px' }}>
+              {VOICE_TIPS.map((_, i) => (
+                <div key={i} onClick={() => setIndex(i)} style={{
+                  width: '7px', height: '7px', borderRadius: '50%',
+                  background: i === index ? '#1a1a1a' : '#ddd',
+                  cursor: 'pointer', transition: 'background 0.15s',
+                }} />
+              ))}
+            </div>
+            
+            {/* Nav */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '16px' }}>
+              <button onClick={() => setIndex(i => (i - 1 + VOICE_TIPS.length) % VOICE_TIPS.length)} style={{
+                background: 'transparent', border: '1px solid rgba(0,0,0,0.15)', borderRadius: '8px',
+                padding: '6px 16px', fontSize: '13px', cursor: 'pointer', color: 'rgba(0,0,0,0.5)',
+              }}>←</button>
+              <button onClick={onDismiss} style={{
+                background: '#ffe600', border: '2px solid #1a1a1a', borderRadius: '10px',
+                padding: '6px 24px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+                boxShadow: '2px 2px 0 #1a1a1a',
+              }}>Got it</button>
+              <button onClick={() => setIndex(i => (i + 1) % VOICE_TIPS.length)} style={{
+                background: 'transparent', border: '1px solid rgba(0,0,0,0.15)', borderRadius: '8px',
+                padding: '6px 16px', fontSize: '13px', cursor: 'pointer', color: 'rgba(0,0,0,0.5)',
+              }}>→</button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+    
+    // Tip state helpers
+    const TIP_KEYS = {
+      triggerCount: 'wordHunter_tipTriggerCount',
+      lifetimeCaptures: 'wordHunter_lifetimeCaptures',
+      permanentDismiss: 'wordHunter_tipsDismissed',
+      tipsEnabled: 'wordHunter_tipsEnabled',
+    };
+    
+    function getTipTriggerCount() { return parseInt(localStorage.getItem(TIP_KEYS.triggerCount) || '0'); }
+    function setTipTriggerCount(n) { localStorage.setItem(TIP_KEYS.triggerCount, String(n)); }
+    function getLifetimeCaptures() { return parseInt(localStorage.getItem(TIP_KEYS.lifetimeCaptures) || '0'); }
+    function incLifetimeCaptures() { const n = getLifetimeCaptures() + 1; localStorage.setItem(TIP_KEYS.lifetimeCaptures, String(n)); return n; }
+    function getTipsPermanentlyDismissed() { return localStorage.getItem(TIP_KEYS.permanentDismiss) === 'true'; }
+    function setTipsPermanentlyDismissed(v) { localStorage.setItem(TIP_KEYS.permanentDismiss, String(v)); }
+    function getTipsEnabled() { const v = localStorage.getItem(TIP_KEYS.tipsEnabled); return v === null ? true : v === 'true'; }
+    function setTipsEnabled(v) { localStorage.setItem(TIP_KEYS.tipsEnabled, String(v)); }
+
+    // ============================================
+    // CAPTURE PAGE
+    // ============================================
+    
+    const CapturePage = ({ onCapture, defaultLang, apiKey, googleTTSKey }) => {
+      // Chrome detection: exclude Edge, Opera, etc. that also contain "Chrome"
+      const isChrome = useRef(/Chrome\//.test(navigator.userAgent) && !/Edg|OPR|Brave/.test(navigator.userAgent)).current;
+      
+      const [status, setStatus] = useState(isChrome ? 'listening' : 'manual');
+      const [errorMessage, setErrorMessage] = useState('');
+      const [timeLeft, setTimeLeft] = useState(7);
+      const [transcript, setTranscript] = useState('');
+      const [manualInput, setManualInput] = useState('');
+      const [captureLang, setCaptureLang] = useState(defaultLang);
+      const [resolving, setResolving] = useState(false);
+      const [candidates, setCandidates] = useState([]);
+      const [editValue, setEditValue] = useState('');
+      const [alternatives, setAlternatives] = useState([]);
+      const [editReading, setEditReading] = useState('');
+      const [showTipModal, setShowTipModal] = useState(false);
+      const [debugLog, setDebugLog] = useState([]);
+      const [showDebugLog, setShowDebugLog] = useState(false);
+      const recStartTimeRef = useRef(0);
+      const hadInterimRef = useRef(false);
+      
+      const capLog = useCallback((msg, level = 'info') => {
+        const elapsed = recStartTimeRef.current ? Date.now() - recStartTimeRef.current : 0;
+        const ts = recStartTimeRef.current ? `${elapsed}ms` : '—';
+        const entry = { ts, msg, level, time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) };
+        setDebugLog(prev => [...prev.slice(-30), entry]);
+        console.log(`[CAP ${ts}] ${msg}`);
+      }, []);
+      
+      // Tip tracking refs (persist across re-renders, not in state to avoid re-render loops)
+      const gotFinalRef = useRef(false);
+      const lastInterimRef = useRef('');
+      const [listeningReady, setListeningReady] = useState(false);      
+      const handleTipDismiss = useCallback(() => { setShowTipModal(false); }, []);
+      
+      // Mini dictionary for confirmation page definitions
+      const miniDict = useRef({
+        '木': 'tree', '目': 'eye', '手': 'hand', '日': 'day', '火': 'fire', '水': 'water',
+        '金': 'gold', '土': 'earth', '月': 'moon', '花': 'flower', '雨': 'rain', '風': 'wind',
+        '空': 'sky', '海': 'sea', '山': 'mountain', '川': 'river', '石': 'stone', '星': 'star',
+        '犬': 'dog', '猫': 'cat', '鳥': 'bird', '魚': 'fish', '馬': 'horse', '虫': 'bug',
+        '赤': 'red', '青': 'blue', '白': 'white', '黒': 'black', '大': 'big', '小': 'small',
+        '新しい': 'new', '古い': 'old', '高い': 'tall', '安い': 'cheap', '長い': 'long',
+        '食べる': 'eat', '飲む': 'drink', '行く': 'go', '来る': 'come', '見る': 'see',
+        '聞く': 'hear', '話す': 'speak', '書く': 'write', '読む': 'read', '走る': 'run',
+        '歩く': 'walk', '泳ぐ': 'swim', '飛ぶ': 'fly', '買う': 'buy', '売る': 'sell',
+        '今日': 'today', '明日': 'tomorrow', '昨日': 'yesterday', '今': 'now', '前': 'before',
+        '後': 'after', '上': 'above', '下': 'below', '中': 'inside', '外': 'outside',
+        '右': 'right', '左': 'left', '北': 'north', '南': 'south', '東': 'east', '西': 'west',
+        '人': 'person', '男': 'man', '女': 'woman', '子': 'child', '友達': 'friend',
+        '家': 'house', '車': 'car', '電車': 'train', '道': 'road', '駅': 'station',
+        '学校': 'school', '仕事': 'work', '時間': 'time', '天気': 'weather', '元気': 'energy',
+        '好き': 'like', '嫌い': 'dislike', '欲しい': 'want', '怖い': 'scary',
+        'お金': 'money', '名前': 'name', '言葉': 'word', '意味': 'meaning',
+        '朝': 'morning', '昼': 'noon', '夜': 'night', '春': 'spring', '夏': 'summer',
+        '秋': 'autumn', '冬': 'winter', '雪': 'snow', '雲': 'cloud', '光': 'light',
+        '音': 'sound', '色': 'color', '力': 'power', '心': 'heart', '体': 'body',
+        '頭': 'head', '顔': 'face', '口': 'mouth', '耳': 'ear', '鼻': 'nose',
+        '食べ物': 'food', '飲み物': 'drink', '果物': 'fruit', '野菜': 'vegetable',
+        '肉': 'meat', '米': 'rice', '茶': 'tea', '酒': 'sake', '塩': 'salt',
+        '砂糖': 'sugar', '紙': 'paper', '本': 'book', '映画': 'movie', '音楽': 'music',
+        '勉強': 'study', '練習': 'practice', '旅行': 'travel', '散歩': 'stroll',
+        '問題': 'problem', '答え': 'answer', '質問': 'question', '簡単': 'easy',
+        '難しい': 'difficult', '危ない': 'dangerous', '楽しい': 'fun', '嬉しい': 'happy',
+        '悲しい': 'sad', '優しい': 'kind', '強い': 'strong', '弱い': 'weak',
+        '早い': 'early', '遅い': 'late', '近い': 'near', '遠い': 'far',
+        '多い': 'many', '少ない': 'few', '暑い': 'hot', '寒い': 'cold',
+        '美味しい': 'delicious', '不味い': 'bad taste', '綺麗': 'beautiful', '可愛い': 'cute',
+        '投資': 'investment', '経済': 'economy', '予測': 'forecast', '連続': 'continuous',
+        '最適': 'optimal', '冒険': 'adventure', '財務': 'finance',
+      }).current;
+      const hiraganaDict = useRef({
+        'き': 'tree', 'め': 'eye', 'て': 'hand', 'ひ': 'fire',
+        'みず': 'water', 'かね': 'gold', 'つち': 'earth', 'つき': 'moon',
+        'はな': 'flower', 'あめ': 'rain', 'かぜ': 'wind', 'そら': 'sky',
+        'うみ': 'sea', 'やま': 'mountain', 'かわ': 'river', 'いし': 'stone',
+        'ほし': 'star', 'いぬ': 'dog', 'ねこ': 'cat', 'とり': 'bird',
+        'さかな': 'fish', 'うま': 'horse', 'むし': 'bug', 'あか': 'red',
+        'あお': 'blue', 'しろ': 'white', 'くろ': 'black',
+        'たべる': 'eat', 'のむ': 'drink', 'いく': 'go', 'くる': 'come', 'みる': 'see',
+        'きく': 'hear', 'はなす': 'speak', 'かく': 'write', 'よむ': 'read',
+        'きょう': 'today', 'あした': 'tomorrow', 'きのう': 'yesterday', 'いま': 'now',
+        'ひと': 'person', 'いえ': 'house', 'くるま': 'car', 'みち': 'road', 'えき': 'station',
+        'しごと': 'work', 'じかん': 'time', 'てんき': 'weather', 'げんき': 'energy',
+        'すき': 'like', 'おかね': 'money', 'なまえ': 'name', 'ことば': 'word', 'いみ': 'meaning',
+        'あさ': 'morning', 'ひる': 'noon', 'よる': 'night', 'はる': 'spring',
+        'なつ': 'summer', 'あき': 'autumn', 'ふゆ': 'winter', 'ゆき': 'snow',
+        'くも': 'cloud', 'おと': 'sound', 'いろ': 'color',
+        'こころ': 'heart', 'からだ': 'body', 'あたま': 'head', 'かお': 'face',
+        'ほん': 'book', 'えいが': 'movie', 'おんがく': 'music',
+        'べんきょう': 'study', 'りょこう': 'travel', 'さんぽ': 'stroll',
+        'もんだい': 'problem', 'こたえ': 'answer', 'かんたん': 'easy',
+        'たのしい': 'fun', 'うれしい': 'happy', 'かなしい': 'sad',
+        'おいしい': 'delicious', 'かわいい': 'cute',
+        'とうし': 'investment', 'けいざい': 'economy', 'よそく': 'forecast',
+      }).current;
+      const lookupDef = useCallback((word) => miniDict[word] || hiraganaDict[word] || '', []);
+      
+      // Refs to avoid stale closures
+      const langRef = useRef(captureLang);
+      langRef.current = captureLang;
+      const onCaptureRef = useRef(onCapture);
+      onCaptureRef.current = onCapture;
+      const activeRecRef = useRef(null);
+      const activeTimersRef = useRef({ timeout: null, countdown: null });
+      
+      useEffect(() => { setCaptureLang(defaultLang); }, [defaultLang]);
+      
+      const isJaMode = captureLang === 'ja';
+      
+      const stopCurrentRecognition = () => {
+        try { if (activeRecRef.current) activeRecRef.current.abort(); } catch(e) {}
+        activeRecRef.current = null;
+        if (activeTimersRef.current.timeout) clearTimeout(activeTimersRef.current.timeout);
+        if (activeTimersRef.current.countdown) clearInterval(activeTimersRef.current.countdown);
+      };
+      
+      const startListening = useCallback(() => {
+        stopCurrentRecognition();
+        setStatus('listening');
+        setErrorMessage('');
+        setTimeLeft(7);
+        setTranscript('');
+        setEditValue('');
+        setAlternatives([]);
+        setResolving(false);
+        
+        // Visual delay: muted appearance for 250ms while mic initializes
+        setListeningReady(false);
+        activeTimersRef.current.prep = setTimeout(() => { setListeningReady(true); }, 250);
+        
+        const currentLang = langRef.current;
+        const recognizerLang = currentLang === 'ja' ? 'ja-JP' : 'en-US';
+        
+        const countdownId = setInterval(() => {
+          setTimeLeft(prev => {
+            if (prev <= 1) { clearInterval(countdownId); return 0; }
+            return prev - 1;
+          });
+        }, 1000);
+        activeTimersRef.current.countdown = countdownId;
+        
+        // ===== Cloud STT path (iOS Safari, non-Chrome) =====
+        if (shouldUseCloudSTT()) {
+          const gKey = getStoredGoogleTTSKey();
+          if (!gKey) {
+            clearInterval(countdownId);
+            setStatus('manual');
+            setErrorMessage("Google API key required for voice capture on this device. Type instead:");
+            capLog('📱 iOS/non-Chrome detected, no Google key → manual mode', 'warn');
+            return;
+          }
+          
+          capLog(`📱 Using Cloud STT (${recognizerLang})`);
+          recStartTimeRef.current = Date.now();
+          
+          const sttPromise = recognizeWithCloudSTT(gKey, recognizerLang);
+          activeRecRef.current = { stop: () => sttPromise.stop?.() };
+          
+          // Show "Listening..." text while recording
+          setTranscript('');
+          
+          sttPromise.then(result => {
+            clearInterval(countdownId);
+            const elapsed = Date.now() - recStartTimeRef.current;
+            capLog(`✅ CloudSTT result: "${result.transcript}" (${result.alternatives.length} alts, conf: ${Math.round(result.confidence * 100)}%, elapsed: ${elapsed}ms)`);
+            
+            if (!result.transcript) {
+              setStatus('error');
+              setErrorMessage("No speech detected");
+              return;
+            }
+            
+            const text = result.transcript;
+            setTranscript(text);
+            setAlternatives(result.alternatives);
+            setEditValue(text);
+            
+            if (currentLang === 'ja') {
+              // Check if any alternative is pure kana (for reading hint)
+              const isAllKana = (s) => /^[\u3040-\u309f\u30a0-\u30ff\u30fc]+$/.test(s);
+              const hasKanji = /[\u4e00-\u9faf\u3400-\u4dbf]/.test(text);
+              let reading = '';
+              if (hasKanji) {
+                for (const alt of result.alternatives) {
+                  if (isAllKana(alt.transcript) && alt.transcript !== text) { reading = alt.transcript; break; }
+                }
+              }
+              setEditReading(reading);
+            } else {
+              setEditReading('');
+            }
+            setStatus('editing');
+          }).catch(err => {
+            clearInterval(countdownId);
+            capLog(`❌ CloudSTT error: ${err.message}`, 'error');
+            if (err.message === 'mic-denied') {
+              setStatus('manual');
+              setErrorMessage("Mic unavailable. Type instead:");
+            } else {
+              setStatus('error');
+              setErrorMessage(err.message === 'stt-api-error' ? "Speech API error — check Google key" : "No speech detected");
+            }
+          });
+          
+          return;
+        }
+        
+        // ===== Web Speech API path (Chrome desktop) =====
+        if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+          clearInterval(countdownId);
+          setStatus('manual');
+          setErrorMessage("Speech recognition not supported. Type instead:");
+          return;
+        }
+        
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognition.lang = recognizerLang;
+        recognition.interimResults = true;
+        recognition.continuous = false;
+        recognition.maxAlternatives = 5;
+        activeRecRef.current = recognition;
+        
+        gotFinalRef.current = false;
+        lastInterimRef.current = '';
+        hadInterimRef.current = false;
+        recStartTimeRef.current = Date.now();
+        capLog(`🎙 Starting recognition (${recognizerLang})`);
+        
+        const timeoutId = setTimeout(() => {
+          capLog('⏰ 7s timeout — stopping', 'warn');
+          try { recognition.stop(); } catch(e) {}
+          clearInterval(countdownId);
+          if (!gotFinalRef.current) {
+            capLog('❌ No speech detected (timeout)', 'error');
+            setStatus('error');
+            setErrorMessage("No speech detected");
+          }
+        }, 7000);
+        activeTimersRef.current.timeout = timeoutId;
+        
+        recognition.onaudiostart = () => capLog('🔊 Audio stream started');
+        recognition.onaudioend = () => capLog('🔇 Audio stream ended');
+        recognition.onspeechstart = () => capLog('🗣 Speech detected');
+        recognition.onspeechend = () => capLog('🤐 Speech ended');
+        recognition.onstart = () => capLog('✅ Recognition started');
+        
+        recognition.onresult = (event) => {
+          const current = event.results[event.results.length - 1];
+          let text = current[0].transcript;
+          // Strip internal whitespace from Japanese (speech API sometimes inserts spaces between segments)
+          if (langRef.current === 'ja') text = text.replace(/\s+/g, '');
+          const chars = [...text];
+          setTranscript(chars.length > 12 ? chars.slice(0, 12).join('') : text);
+          
+          if (!current.isFinal) {
+            hadInterimRef.current = true;
+            capLog(`📝 interim: "${text}"`);
+          }
+          
+          // Capture interim hiragana — before isFinal, the speech API often returns kana
+          if (!current.isFinal && langRef.current === 'ja') {
+            lastInterimRef.current = text.replace(/\s+/g, '');
+          }
+          
+          if (current.isFinal) {
+            capLog(`✅ FINAL: "${text}" (${current.length} alts, conf: ${Math.round((current[0].confidence || 0) * 100)}%)`);
+            gotFinalRef.current = true;
+            clearTimeout(timeoutId);
+            clearInterval(countdownId);
+            
+            if (langRef.current === 'ja') {
+              // Japanese: go to confirmation/editing step
+              const alts = [];
+              const altCount = Math.min(current.length, 3);
+              for (let i = 0; i < altCount; i++) {
+                alts.push({ transcript: current[i].transcript.replace(/\s+/g, ''), confidence: current[i].confidence });
+              }
+              setAlternatives(alts);
+              setEditValue(text);
+              
+              // Determine furigana reading for the main word
+              const hasKanji = /[\u4e00-\u9faf\u3400-\u4dbf]/.test(text);
+              let reading = '';
+              if (hasKanji) {
+                // Strategy 1: check if any speech alternative is pure kana (hiragana/katakana)
+                const isAllKana = (s) => /^[\u3040-\u309f\u30a0-\u30ff\u30fc]+$/.test(s);
+                for (let i = 0; i < current.length; i++) {
+                  const alt = current[i].transcript.replace(/\s+/g, '');
+                  if (isAllKana(alt) && alt !== text) { reading = alt; break; }
+                }
+                // Strategy 2: fall back to last interim result
+                if (!reading) {
+                  const interim = lastInterimRef.current;
+                  if (interim && interim !== text) reading = interim;
+                }
+              }
+              setEditReading(reading);
+              setStatus('editing');
+            } else {
+              // English: also go to confirmation/editing step
+              const alts = [];
+              const altCount = Math.min(current.length, 3);
+              for (let i = 0; i < altCount; i++) {
+                alts.push({ transcript: current[i].transcript, confidence: current[i].confidence });
+              }
+              setAlternatives(alts);
+              setEditValue(text);
+              setEditReading('');
+              setStatus('editing');
+            }
+          }
+        };
+        
+        recognition.onerror = (event) => {
+          capLog(`⚠️ onerror: ${event.error}${event.message ? ' — ' + event.message : ''}`, 'error');
+          clearTimeout(timeoutId);
+          clearInterval(countdownId);
+          if (event.error === 'aborted') { capLog('↩ Ignoring abort (intentional)'); return; }
+          if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            capLog('🚫 Mic not allowed → manual mode', 'error');
+            setStatus('manual');
+            setErrorMessage("Mic unavailable. Type instead:");
+          } else {
+            capLog(`❌ Error → error state: ${event.error}`, 'error');
+            setStatus('error');
+            setErrorMessage(event.error === 'no-speech' ? "No speech detected" : `Error: ${event.error}`);
+          }
+        };
+        
+        recognition.onend = () => {
+          const elapsed = Date.now() - recStartTimeRef.current;
+          capLog(`🔚 onend — gotFinal: ${gotFinalRef.current}, hadInterim: ${hadInterimRef.current}, elapsed: ${elapsed}ms`);
+          clearTimeout(timeoutId);
+          clearInterval(countdownId);
+          if (!gotFinalRef.current) {
+            capLog('⚠️ Ended without final result → setting error', 'warn');
+            setStatus(prev => prev === 'listening' ? 'error' : prev);
+            setErrorMessage(prev => prev || "Recognition failed");
+          }
+        };
+        
+        try { recognition.start(); capLog('📡 recognition.start() called'); }
+        catch (e) { capLog(`💥 start() threw: ${e.message}`, 'error'); clearInterval(countdownId); setStatus('manual'); setErrorMessage("Mic unavailable. Type instead:"); }
+      }, []);
+      
+      const handleEnglishResolve = async (englishText) => {
+        const results = await resolveEnglishToJapanese(englishText, apiKey);
+        setResolving(false);
+        
+        if (results && results.length > 0) {
+          // Normalize kanji strings from API
+          results.forEach(r => { if (r.kanji) r.kanji = r.kanji.trim(); });
+          const topResult = results[0];
+          const hasRealAlternatives = results.length > 1 && 
+            results.some((r, i) => i > 0 && (r.confidence || 0) >= 20);
+          const topConfidence = topResult.confidence || 90;
+          
+          if (results.length === 1 || topConfidence >= 70 && !hasRealAlternatives) {
+            setTranscript(topResult.kanji);
+            onCaptureRef.current(topResult.kanji);
+          } else {
+            setCandidates(results.slice(0, 3));
+            setStatus('picking');
+          }
+        } else {
+          onCaptureRef.current(englishText);
+        }
+      };
+      
+      const handlePickCandidate = (candidate) => {
+        setCandidates([]);
+        onCaptureRef.current(candidate.kanji);
+      };
+      
+      const handleEditSubmit = () => {
+        if (!editValue.trim()) return;
+        const text = editValue.trim();
+        capLog(`👆 "Go" clicked: "${text}" (${langRef.current})`);
+        setTranscript(text);
+        
+        if (langRef.current === 'ja') {
+          // Go straight to word definition — no success page needed
+          onCaptureRef.current(text);
+        } else {
+          // English: resolve to Japanese (success page shows spinner)
+          setStatus('success');
+          setResolving(true);
+          handleEnglishResolve(text);
+        }
+      };
+      
+      const handleManualSubmit = () => {
+        if (!manualInput.trim()) return;
+        let text = manualInput.trim();
+        // Strip internal whitespace from Japanese input
+        if (langRef.current === 'ja') text = text.replace(/\s+/g, '');
+        capLog(`👆 "Capture" clicked: "${text}" (${langRef.current})`);
+        setTranscript(text);
+        
+        if (langRef.current === 'ja') {
+          // Japanese: go straight to word definition
+          onCaptureRef.current(text);
+        } else {
+          // English: resolve to Japanese
+          setStatus('success');
+          setResolving(true);
+          handleEnglishResolve(text);
+        }
+      };
+      
+      const handleToggleLang = (lang) => {
+        if (lang === captureLang) return;
+        capLog(`🔀 Lang toggle: ${captureLang} → ${lang}`);
+        setCaptureLang(lang);
+        if (status === 'listening') {
+          stopCurrentRecognition();
+          setStatus('listening');
+          setTranscript('');
+          setTimeLeft(7);
+          setTimeout(() => startListening(), 350);
+        }
+      };
+      
+      useEffect(() => {
+        if (!isChrome) return;
+        const timer = setTimeout(() => startListening(), 300);
+        return () => { clearTimeout(timer); stopCurrentRecognition(); };
+      }, []);
+      
+      // Track successful captures
+      useEffect(() => {
+        if (status === 'success') incLifetimeCaptures();
+      }, [status]);
+      
+      const TryAgainBtn = () => (
+        <button
+          onClick={() => { capLog('👆 "Try again" clicked'); startListening(); }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.35)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+          style={{
+            marginTop: '24px',
+            background: 'transparent', border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: '10px', padding: '8px 20px', cursor: 'pointer',
+            fontSize: '13px', fontWeight: '500', color: 'rgba(255,255,255,0.4)',
+            display: 'flex', alignItems: 'center', gap: '6px', transition: 'all 0.15s ease',
+          }}
+        ><span style={{ fontSize: '14px', display: 'inline-block', transform: 'scaleX(-1)' }}>↻</span> Try again</button>
+      );
+      
+      const LangToggle = () => (
+        <div style={{
+          position: 'absolute', top: '24px', left: '50%', transform: 'translateX(-50%)',
+          display: 'flex', alignItems: 'center', gap: '0',
+          background: 'rgba(255,255,255,0.08)', borderRadius: '50px',
+          padding: '3px', border: '1px solid rgba(255,255,255,0.12)',
+          zIndex: 10
+        }}>
+          <button
+            onClick={() => handleToggleLang('ja')}
+            style={{
+              padding: '6px 14px', borderRadius: '50px', border: 'none', cursor: 'pointer',
+              fontSize: '12px', fontWeight: '700', transition: 'all 0.15s ease',
+              background: isJaMode ? '#ffe600' : 'transparent',
+              color: isJaMode ? '#000' : 'rgba(255,255,255,0.4)',
+              display: 'flex', alignItems: 'center', gap: '5px'
+            }}
+          >
+            <span style={{ fontSize: '14px' }}>🇯🇵</span> JA
+          </button>
+          <button
+            onClick={() => handleToggleLang('en')}
+            style={{
+              padding: '6px 14px', borderRadius: '50px', border: 'none', cursor: 'pointer',
+              fontSize: '12px', fontWeight: '700', transition: 'all 0.15s ease',
+              background: !isJaMode ? '#60a5fa' : 'transparent',
+              color: !isJaMode ? '#fff' : 'rgba(255,255,255,0.4)',
+              display: 'flex', alignItems: 'center', gap: '5px'
+            }}
+          >
+            <span style={{ fontSize: '14px' }}>🇺🇸</span> EN
+          </button>
+        </div>
+      );
+      
+      return (
+        <div style={{
+          padding: '24px', minHeight: '100vh', position: 'relative',
+          background: status === 'success' ? '#8a7a00' : status === 'error' ? '#2d1f1f' : status === 'editing' ? '#8a7a00' : status === 'picking' ? '#8a7a00' : '#1a1a2e',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', transition: 'background 0.3s ease'
+        }}>
+          {status !== 'success' && status !== 'picking' && status !== 'editing' && <LangToggle />}
+          
+          {status === 'listening' && (
+            <>
+              <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: isJaMode ? 'rgba(255, 51, 102, 0.2)' : 'rgba(96, 165, 250, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: listeningReady ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: listeningReady ? 1 : 0.25 }}>
+                <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: isJaMode ? '#ff3366' : '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: listeningReady ? 1 : 0.25 }}>
+                  <div style={{ width: '24px', height: '24px', borderRadius: '4px', background: '#fff' }}/>
+                </div>
+              </div>
+              <p style={{ marginTop: '32px', fontSize: '20px', fontWeight: '700', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)' }}>Recording {isJaMode ? 'Japanese' : 'English'}...</p>
+              <p style={{ marginTop: '12px', fontSize: '15px', color: 'rgba(255,255,255,0.6)', opacity: listeningReady ? 1 : 0 }}>
+                {isJaMode ? 'Say a word in Japanese' : 'Say a word in English'}
+              </p>
+              {transcript && <p style={{ marginTop: '24px', fontSize: '32px', fontWeight: '800', color: '#ffe600' }}>{transcript}</p>}
+              <p style={{ marginTop: '24px', fontSize: '14px', color: 'rgba(255,255,255,0.4)' }}>{timeLeft}s</p>
+              <button onClick={() => { capLog('👆 "Type instead" clicked'); gotFinalRef.current = true; stopCurrentRecognition(); setStatus('manual'); setErrorMessage(''); }} style={{
+                marginTop: '32px', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: '8px', padding: '8px 20px', color: 'rgba(255,255,255,0.35)',
+                fontSize: '13px', cursor: 'pointer'
+              }}>⌨️ Type instead</button>
+            </>
+          )}
+          
+          {status === 'editing' && (
+            <>
+              {editReading && (
+                <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px', letterSpacing: '1px' }}>{editReading}</p>
+              )}
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'stretch', width: '100%', maxWidth: '390px' }}>
+                <input type="text" value={editValue} onChange={e => { setEditValue(e.target.value); setEditReading(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleEditSubmit()}
+                  autoFocus
+                  style={{ flex: 1, minWidth: 0, maxWidth: '300px', padding: '18px 16px', fontSize: '28px', fontWeight: '700', border: '3px solid #000', borderRadius: '14px', textAlign: 'center', outline: 'none', background: '#fff' }} />
+                <button onClick={handleEditSubmit} disabled={!editValue.trim()} style={{
+                  flex: 'none', padding: '18px 28px', background: editValue.trim() ? '#ffe600' : '#666',
+                  border: '3px solid #000', borderRadius: '14px',
+                  fontSize: '18px', fontWeight: '800', cursor: editValue.trim() ? 'pointer' : 'default',
+                  color: '#000', whiteSpace: 'nowrap',
+                  opacity: editValue.trim() ? 1 : 0.5,
+                  boxShadow: editValue.trim() ? '3px 3px 0 #000' : 'none',
+                }}>Go</button>
+              </div>
+              <p style={{ marginTop: '10px', fontSize: '14px', color: 'rgba(255,255,255,0.55)', fontWeight: '400', minHeight: '20px', width: '100%', maxWidth: '300px', textAlign: 'center', marginLeft: 'auto', marginRight: 'auto', paddingRight: '90px' }}>
+                {lookupDef(editValue) || '\u00A0'}
+              </p>
+              {alternatives.length > 1 && (
+                <div style={{ marginTop: '50px', marginBottom: '50px', display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'flex-start', justifyContent: 'center' }}>
+                  <span style={{ fontSize: '17px', color: 'rgba(255,255,255,0.45)', fontWeight: '500', alignSelf: 'center' }}>Change to:</span>
+                  {alternatives.slice(1).map((a, i) => {
+                    const eng = lookupDef(a.transcript);
+                    return (
+                      <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+                        <button onClick={() => setEditValue(a.transcript)} style={{
+                          padding: '6px 14px', background: 'transparent', border: '1px solid rgba(255,255,255,0.25)',
+                          borderRadius: '20px', color: 'rgba(255,255,255,0.7)', fontSize: '15px', fontWeight: '400', cursor: 'pointer',
+                        }}>{a.transcript}</button>
+                        {eng && <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', fontWeight: '400' }}>{eng}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <TryAgainBtn />
+            </>
+          )}
+          
+          {status === 'picking' && (
+            <>
+              <p style={{ fontSize: '16px', fontWeight: '600', color: 'rgba(255,255,255,0.7)', marginBottom: '16px' }}>
+                <span style={{ fontWeight: '800', color: '#fff' }}>{transcript}</span> can mean:
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '340px' }}>
+                {candidates.map((c, i) => (
+                  <button
+                    key={i}
+                    onClick={() => handlePickCandidate(c)}
+                    style={{
+                      background: 'rgba(0,0,0,0.2)', border: '2px solid rgba(255,255,255,0.2)',
+                      borderRadius: '14px', padding: '16px 20px', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: '16px',
+                      transition: 'all 0.1s ease', textAlign: 'left'
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,0,0,0.35)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.4)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(0,0,0,0.2)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                  >
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '14px', color: 'rgba(255,255,255,0.7)', fontWeight: '500' }}>{c.description || c.english}</span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: '64px' }}>
+                      <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.45)' }}>{c.hiragana}</span>
+                      <span style={{ fontSize: '28px', color: '#ffe600', fontFamily: "'Noto Serif JP', serif", lineHeight: 1.2 }}>{c.kanji}</span>
+                    </div>
+                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '18px' }}>›</span>
+                  </button>
+                ))}
+              </div>
+              <TryAgainBtn />
+            </>
+          )}
+          
+          {status === 'success' && (
+            <>
+              <p style={{ fontSize: '28px', fontWeight: '700', color: '#fff' }}>{transcript}</p>
+              <div style={{
+                marginTop: '24px', width: '48px', height: '48px',
+                border: '4px solid rgba(255,255,255,0.15)', borderTopColor: '#fff',
+                borderRadius: '50%', animation: 'spin 1s linear infinite'
+              }}/>
+              <p style={{ marginTop: '20px', fontSize: '14px', color: 'rgba(255,255,255,0.5)' }}>
+                {resolving ? 'Looking up Japanese...' : 'Loading...'}
+              </p>
+            </>
+          )}
+          
+          {status === 'error' && (
+            <>
+              <p style={{ fontSize: '16px', fontWeight: '600', color: '#fca5a5', maxWidth: '280px', textAlign: 'center' }}>{errorMessage}</p>
+              <TryAgainBtn />
+              <button onClick={() => setShowTipModal(true)} style={{
+                marginTop: '36px', background: 'transparent', border: 'none',
+                color: 'rgba(255,255,255,0.35)', fontSize: '12px', cursor: 'pointer',
+              }}>Voice tips</button>
+            </>
+          )}
+          
+          {status === 'manual' && (
+            <>
+              {!isChrome && (
+                <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', marginBottom: '20px' }}>Use Google Chrome browser to enable voice capture</p>
+              )}
+              <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.6)', marginBottom: '24px' }}>{errorMessage}</p>
+              <input type="text" value={manualInput} onChange={(e) => { const chars = [...e.target.value]; setManualInput(chars.length > 12 ? chars.slice(0, 12).join('') : e.target.value); }} onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()} placeholder={isJaMode ? "Type in Japanese..." : "Type in English..."} autoFocus style={{ width: '100%', maxWidth: '300px', padding: '16px 20px', fontSize: '24px', fontWeight: '600', border: '3px solid #000', borderRadius: '12px', textAlign: 'center', outline: 'none' }} />
+              <button onClick={handleManualSubmit} disabled={!manualInput.trim()} style={{ marginTop: '16px', background: manualInput.trim() ? '#ffe600' : '#444', border: '3px solid #000', borderRadius: '12px', padding: '14px 48px', fontSize: '16px', fontWeight: '700', cursor: manualInput.trim() ? 'pointer' : 'default', boxShadow: manualInput.trim() ? '4px 4px 0 #000' : 'none', opacity: manualInput.trim() ? 1 : 0.5 }}>Capture</button>
+              {isChrome && (
+                <button onClick={startListening} style={{ marginTop: '24px', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.4)', fontSize: '13px', cursor: 'pointer', textDecoration: 'underline' }}>Try voice again</button>
+              )}
+            </>
+          )}
+          
+          {/* Debug log panel */}
+          <button onClick={() => setShowDebugLog(!showDebugLog)} style={{
+            position: 'fixed', bottom: '76px', right: '12px', zIndex: 250,
+            background: 'rgba(0,0,0,0.5)', border: 'none', borderRadius: '8px',
+            padding: '4px 10px', fontSize: '11px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer',
+          }}>📋 {debugLog.length}</button>
+          
+          {showDebugLog && (
+            <div style={{
+              position: 'fixed', bottom: '108px', right: '12px', left: '12px', zIndex: 250,
+              background: '#0a0a0a', borderRadius: '12px', padding: '10px',
+              maxHeight: '40vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log ({debugLog.length})</span>
+                <button onClick={() => setDebugLog([])} style={{ background: 'none', border: 'none', fontSize: '10px', color: '#666', cursor: 'pointer' }}>Clear</button>
+              </div>
+              {debugLog.map((e, i) => (
+                <div key={i} style={{
+                  fontSize: '11px', fontFamily: 'monospace', lineHeight: 1.5,
+                  color: e.level === 'error' ? '#f87171' : e.level === 'warn' ? '#fbbf24' : '#4ade80',
+                  borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '2px 0',
+                }}>
+                  <span style={{ color: '#666', marginRight: '6px' }}>{e.time}</span>
+                  <span style={{ color: '#888', marginRight: '6px' }}>{e.ts}</span>
+                  {e.msg}
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {showTipModal && (
+            <VoiceTipModal onDismiss={handleTipDismiss} />
+          )}
+          
+          <style>{`
+            @keyframes pulse-ring {
+              0% { transform: scale(1); opacity: 1; }
+              50% { transform: scale(1.1); opacity: 0.7; }
+              100% { transform: scale(1); opacity: 1; }
+            }
+            @keyframes spin { to { transform: rotate(360deg); } }
+          `}</style>
+        </div>
+      );
+    };
+
+    // ============================================
+    // HISTORY PAGE
+    // ============================================
+    
+    const HistoryPage = ({ wordStore, dictionaryWords, onSelectWord, pinnedWords, onTogglePin }) => {
+      const [filter, setFilter] = useState('all');
+      
+      // Gather all words from store
+      const allWords = [];
+      Object.keys(wordStore).forEach(key => {
+        const w = wordStore[key];
+        allWords.push({
+          word: key,
+          kanji: w.kanji || key,
+          hiragana: w.hiragana || '',
+          english: w.english || '',
+          jlpt: w.jlpt || '?',
+          capturedAt: w.capturedAt || new Date().toISOString(),
+          pinned: pinnedWords && pinnedWords.has(w.kanji || key)
+        });
+      });
+      
+      // Sort by date, newest first
+      allWords.sort((a, b) => new Date(b.capturedAt) - new Date(a.capturedAt));
+      
+      const displayWords = filter === 'pinned' ? allWords.filter(w => w.pinned) : allWords;
+      const pinnedCount = allWords.filter(w => w.pinned).length;
+      
+      // Group into time sections
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+      const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - 7);
+      
+      const sections = [];
+      const today = [], yesterday = [], lastWeek = [], older = [];
+      
+      displayWords.forEach(w => {
+        const d = new Date(w.capturedAt);
+        if (d >= todayStart) today.push(w);
+        else if (d >= yesterdayStart) yesterday.push(w);
+        else if (d >= weekStart) lastWeek.push(w);
+        else older.push(w);
+      });
+      
+      if (today.length) sections.push({ label: 'Today', words: today });
+      if (yesterday.length) sections.push({ label: 'Yesterday', words: yesterday });
+      if (lastWeek.length) sections.push({ label: 'Last week', words: lastWeek });
+      if (older.length) sections.push({ label: 'Older', words: older });
+      
+      const jlptColors = { 'N5': '#4ade80', 'N4': '#a3e635', 'N3': '#f59e0b', 'N2': '#f472b6', 'N1': '#ef4444' };
+      
+      return (
+        <div style={{
+          padding: '24px', paddingTop: '32px', paddingBottom: '100px', minHeight: '100vh',
+          background: '#ffe600'
+        }}>
+          <h1 style={{ fontSize: '24px', fontWeight: '800', color: '#000', marginBottom: '4px' }}>Words</h1>
+          <p style={{ fontSize: '13px', color: 'rgba(0,0,0,0.4)', marginBottom: '16px' }}>
+            {allWords.length} word{allWords.length !== 1 ? 's' : ''} captured{pinnedCount > 0 ? ` · ${pinnedCount} pinned` : ''}
+          </p>
+          
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'rgba(0,0,0,0.06)', borderRadius: '10px', padding: '3px' }}>
+            {['all', 'pinned'].map(f => (
+              <button key={f} onClick={() => setFilter(f)} style={{
+                flex: 1, padding: '7px 12px', fontSize: '12px', fontWeight: '700',
+                border: 'none', borderRadius: '8px', cursor: 'pointer',
+                background: filter === f ? '#fff' : 'transparent',
+                color: filter === f ? '#000' : 'rgba(0,0,0,0.4)',
+                boxShadow: filter === f ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.15s ease'
+              }}>
+                {f === 'all' ? 'All' : `🔖 Pinned${pinnedCount > 0 ? ` (${pinnedCount})` : ''}`}
+              </button>
+            ))}
+          </div>
+          
+          {displayWords.length === 0 ? (
+            <div style={{ textAlign: 'center', marginTop: '80px' }}>
+              <span style={{ fontSize: '48px', opacity: 0.5 }}>{filter === 'pinned' ? '🔖' : '📝'}</span>
+              <p style={{ marginTop: '16px', color: 'rgba(0,0,0,0.4)', fontWeight: '600', fontSize: '15px' }}>
+                {filter === 'pinned' ? 'No pinned words yet' : 'No words captured yet'}
+              </p>
+              <p style={{ marginTop: '8px', color: 'rgba(0,0,0,0.25)', fontSize: '13px' }}>
+                {filter === 'pinned' ? 'Pin words from the Learn view to save them here' : 'Captured words will appear here'}
+              </p>
+            </div>
+          ) : (
+            sections.map((section, si) => (
+              <div key={section.label} style={{ marginBottom: si < sections.length - 1 ? '28px' : '0' }}>
+                <div style={{
+                  fontSize: '11px', fontWeight: '700', color: 'rgba(0,0,0,0.35)',
+                  letterSpacing: '1.5px', textTransform: 'uppercase', marginBottom: '12px',
+                  paddingBottom: '8px', borderBottom: '1px solid rgba(0,0,0,0.08)'
+                }}>
+                  {section.label}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {section.words.map((w, i) => (
+                    <button
+                      key={w.word + i}
+                      onClick={() => onSelectWord(w.word)}
+                      style={{
+                        background: 'rgba(255,255,255,0.5)',
+                        border: '2px solid rgba(0,0,0,0.06)',
+                        borderRight: w.pinned ? '3px solid #f43f5e' : '2px solid rgba(0,0,0,0.06)',
+                        borderRadius: '12px',
+                        padding: '10px 16px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '14px',
+                        width: '100%',
+                        textAlign: 'left',
+                        transition: 'all 0.15s ease'
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.8)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.5)'; e.currentTarget.style.transform = 'none'; }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
+                        {w.hiragana && w.hiragana !== w.kanji && (
+                          <span style={{ fontSize: '10px', color: 'rgba(0,0,0,0.35)', marginBottom: '1px' }}>{w.hiragana}</span>
+                        )}
+                        <span style={{ fontSize: '28px', fontWeight: '400', color: '#000', fontFamily: "'Noto Serif JP', serif", lineHeight: 1.1 }}>{(() => { const k = w.kanji || w.word || ''; const chars = [...k]; return chars.length > 9 ? chars.slice(0, 9).join('') + '…' : k; })()}</span>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+                        <div style={{
+                          fontSize: '22px', color: 'rgba(0,0,0,0.45)', fontWeight: '400',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          paddingTop: w.hiragana && w.hiragana !== w.kanji ? '10px' : '0'
+                        }}>
+                          {w.english}
+                        </div>
+                      </div>
+                      {w.jlpt && w.jlpt !== '?' && (
+                        <span style={{
+                          fontSize: '14px', fontWeight: '800', color: '#fff',
+                          background: jlptColors[w.jlpt] || '#888',
+                          padding: '5px 12px', borderRadius: '6px', flexShrink: 0
+                        }}>
+                          {w.jlpt}
+                        </span>
+                      )}
+                      <span style={{ color: 'rgba(0,0,0,0.2)', fontSize: '16px', flexShrink: 0 }}>›</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      );
+    };
+
+    // ============================================
+    // VIEW PAGE
+    // ============================================
+    
+    const ViewPage = ({ word, onNewCapture, onCaptureKanji, isLoading, apiKey, onRetry, googleTTSKey, isPinned, onTogglePin }) => (
+      <div style={{
+        padding: '24px', paddingBottom: '100px', minHeight: '100vh',
+        background: '#ffe600',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '24px'
+      }}>
+        {isLoading ? (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{
+              width: '60px', height: '60px', border: '4px solid rgba(0,0,0,0.1)',
+              borderTopColor: '#000', borderRadius: '50%',
+              animation: 'spin 1s linear infinite', margin: '0 auto'
+            }}/>
+            <p style={{ marginTop: '24px', color: 'rgba(0,0,0,0.6)', fontSize: '16px', fontWeight: '600' }}>
+              Looking up word...
+            </p>
+            <style>{`
+              @keyframes spin {
+                to { transform: rotate(360deg); }
+              }
+            `}</style>
+          </div>
+        ) : (
+          <>
+            {word && word.isPlaceholder && (
+              <div style={{
+                background: 'rgba(239,68,68,0.1)', border: '2px solid #ef4444',
+                borderRadius: '12px', padding: '14px 18px', width: '100%', maxWidth: '360px',
+                display: 'flex', flexDirection: 'column', gap: '8px'
+              }}>
+                <p style={{ fontSize: '13px', fontWeight: '700', color: '#b91c1c' }}>
+                  {!apiKey ? '⚠️ No API key configured' : '⚠️ Failed to load word data'}
+                </p>
+                <p style={{ fontSize: '11px', color: '#991b1b', lineHeight: 1.4 }}>
+                  {!apiKey
+                    ? 'Add your Anthropic API key in Admin (🔑 top right) to fetch real word data.'
+                    : 'The API call failed. Check your API key and try again.'}
+                </p>
+                {apiKey && onRetry && (
+                  <button onClick={onRetry} style={{
+                    background: '#000', color: '#ffe600', border: 'none', borderRadius: '8px',
+                    padding: '8px 16px', fontSize: '12px', fontWeight: '700', cursor: 'pointer',
+                    alignSelf: 'flex-start', marginTop: '4px'
+                  }}>Retry</button>
+                )}
+              </div>
+            )}
+            {word && <WordCard word={word} googleTTSKey={googleTTSKey} onCaptureKanji={onCaptureKanji} isPinned={isPinned} onTogglePin={onTogglePin} />}
+            <button onClick={onNewCapture}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(0,0,0,0.4)'; e.currentTarget.style.color = 'rgba(0,0,0,0.6)'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(0,0,0,0.2)'; e.currentTarget.style.color = 'rgba(0,0,0,0.45)'; }}
+              style={{
+              marginTop: '16px', background: 'transparent', border: '2px solid rgba(0,0,0,0.2)',
+              borderRadius: '12px', padding: '14px 28px', fontSize: '14px', fontWeight: '700',
+              color: 'rgba(0,0,0,0.45)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+              transition: 'all 0.15s ease', width: '80%', maxWidth: '320px',
+            }}>
+              <span>Capture another</span>
+              <span style={{ fontSize: '11px', fontWeight: '500', color: 'rgba(0,0,0,0.25)' }}>Speak slower for best results</span>
+            </button>
+          </>
+        )}
+      </div>
+    );
+
+    // ============================================
+    // BOTTOM NAV
+    // ============================================
+    
+    const BottomNav = ({ activeSection, onSectionChange }) => {
+      const navItems = [
+        { id: 'capture', icon: '🗣️', label: 'Capture' },
+        { id: 'view', icon: '📖', label: 'Learn' },
+        { id: 'history', icon: '📝', label: 'History' },
+        { id: 'practice', icon: '⚔️', label: 'Practice' }
+      ];
+      const [hoveredId, setHoveredId] = useState(null);
+      return (
+        <div style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, background: '#fff',
+          borderTop: '1.5px solid #000', display: 'flex', justifyContent: 'center',
+          padding: '6px 12px 24px 12px', zIndex: 100
+        }}>
+          <div style={{ display: 'flex', gap: '6px', width: '40%', minWidth: '320px' }}>
+          {navItems.map(item => {
+            const isActive = activeSection === item.id;
+            const isHovered = hoveredId === item.id && !isActive;
+            return (
+              <button
+                key={item.id}
+                onClick={() => onSectionChange(item.id)}
+                onMouseEnter={() => setHoveredId(item.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                style={{
+                  background: isActive ? '#ffe600' : isHovered ? '#f0f0f0' : '#f5f5f5',
+                  border: isActive ? '2px solid #000' : isHovered ? '2px solid #ccc' : '2px solid transparent',
+                  display: 'flex', flexDirection: 'row',
+                  alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px 0',
+                  cursor: 'pointer', borderRadius: '12px', flex: 1,
+                  boxShadow: isActive ? '2px 2px 0 #000' : 'none',
+                  transform: isActive ? 'translate(-1px, -1px)' : isHovered ? 'translateY(-1px)' : 'none',
+                  transition: 'all 0.1s ease'
+                }}
+              >
+                <span style={{ fontSize: '20px', lineHeight: 1 }}>{item.icon}</span>
+                <span style={{ fontSize: '14px', fontWeight: '800', color: '#000' }}>{item.label}</span>
+              </button>
+            );
+          })}
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // APP
+    // ============================================
+    
+    const App = () => {
+      console.log('[Kanji Hunt] v2.30.0 loaded');
+      const [activeSection, setActiveSection] = useState('capture');
+      const [captureResetKey, setCaptureResetKey] = useState(0);
+      const [capturedWord, setCapturedWord] = useState(null);
+      const [wordData, setWordData] = useState(null);
+      const [wordStore, setWordStore] = useState(() => WordStore.load());
+      const [isLoading, setIsLoading] = useState(false);
+      const [apiKey, setApiKey] = useState(() => getStoredAPIKey());
+      const [defaultLang, setDefaultLang] = useState(() => getStoredDefaultLang());
+      const [googleTTSKey, setGoogleTTSKey] = useState(() => getStoredGoogleTTSKey());
+      const [showSettings, setShowSettings] = useState(false);
+      const [showAdmin, setShowAdmin] = useState(false);
+      const [pinnedWords, setPinnedWords] = useState(() => {
+        try { return new Set(JSON.parse(localStorage.getItem('wordHunter_pinnedWords') || '[]')); }
+        catch { return new Set(); }
+      });
+      
+      const togglePin = (word) => {
+        setPinnedWords(prev => {
+          const next = new Set(prev);
+          if (next.has(word)) next.delete(word); else next.add(word);
+          localStorage.setItem('wordHunter_pinnedWords', JSON.stringify([...next]));
+          return next;
+        });
+      };
+      
+      const handleSaveKey = (key) => {
+        setApiKey(key);
+        setStoredAPIKey(key);
+      };
+      
+      const handleSaveDefaultLang = (lang) => {
+        setDefaultLang(lang);
+        setStoredDefaultLang(lang);
+      };
+      
+      const handleSaveGoogleTTSKey = (key) => {
+        setGoogleTTSKey(key);
+        setStoredGoogleTTSKey(key);
+      };
+      
+      const handleCapture = async (word, sourceContext) => {
+        // Normalize: trim, strip trailing punctuation, and remove internal spaces from Japanese
+        word = word.trim().replace(/[。．.、,\s]+$/, '');
+        // Japanese words never have internal spaces — strip any inserted by speech API or Claude
+        const hasJapanese = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]/.test(word);
+        if (hasJapanese) word = word.replace(/\s+/g, '');
+        
+        console.log('[handleCapture] Word: "' + word + '"' + (sourceContext ? ' (from: ' + sourceContext + ')' : ''));
+        setCapturedWord(word);
+        setActiveSection('view');
+        
+        // Get word data (from dictionary or store)
+        const { data, source } = WordStore.get(word, wordStore);
+        
+        if (data) {
+          // Found in dictionary or store — update timestamp so it bubbles to top
+          setWordData(data);
+          const updatedData = { ...data, capturedAt: new Date().toISOString() };
+          const newStore = WordStore.addWord(word, updatedData, wordStore);
+          setWordStore(newStore);
+          console.log(`Word "${word}" loaded from ${source} (timestamp updated)`);
+        } else {
+          // New word - fetch progressively
+          setIsLoading(true);
+          console.log(`Fetching data for "${word}"...`);
+          
+          const fullData = await WordStore.fetchOrCreateWord(word, apiKey, (partialWord) => {
+            // Core data ready — show the card immediately
+            setWordData(partialWord);
+            setIsLoading(false);
+            console.log(`Core data for "${word}" ready — showing card`);
+          }, sourceContext);
+          
+          // Extended data ready — update the card seamlessly
+          setWordData(fullData);
+          setIsLoading(false);
+          
+          // Save to store
+          const newStore = WordStore.addWord(word, fullData, wordStore);
+          setWordStore(newStore);
+          
+          console.log(`Word "${word}" fully loaded`);
+        }
+      };
+      
+      const handleNewCapture = () => {
+        setCapturedWord(null);
+        setWordData(null);
+        setActiveSection('capture');
+      };
+      
+      const handleDeleteUnpinned = () => {
+        const newStore = {};
+        Object.keys(wordStore).forEach(key => {
+          if (pinnedWords.has(key)) {
+            newStore[key] = wordStore[key];
+          }
+        });
+        setWordStore(newStore);
+        WordStore.save(newStore);
+      };
+      
+      const handleSelectFromHistory = (word) => {
+        // Load the word data from store or dictionary
+        const { data } = WordStore.get(word, wordStore);
+        if (data) {
+          setCapturedWord(word);
+          setWordData(data);
+          setActiveSection('view');
+        }
+      };
+      
+      // Debug: log store contents
+      useEffect(() => {
+        console.log('Word Store:', wordStore);
+        console.log('Stored words:', Object.keys(wordStore));
+        console.log('API Key configured:', !!apiKey);
+      }, [wordStore, apiKey]);
+      
+      return (
+        <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', position: 'relative' }}>
+          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.30.0</div>
+          {/* Settings & Admin buttons */}
+          <div style={{ position: 'fixed', top: '16px', right: '16px', zIndex: 50, display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => setShowAdmin(true)}
+              style={{
+                width: '40px', height: '40px', borderRadius: '50%',
+                background: apiKey ? '#4ade80' : '#ffe600',
+                border: '2px solid #000', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '18px', boxShadow: '2px 2px 0 #000'
+              }}
+              title={apiKey ? 'API key configured' : 'Add API key'}
+            >
+              🔑
+            </button>
+            <button
+              onClick={() => setShowSettings(true)}
+              style={{
+                width: '40px', height: '40px', borderRadius: '50%',
+                background: '#f5f5f5',
+                border: '2px solid #000', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '18px', boxShadow: '2px 2px 0 #000'
+              }}
+              title="Settings"
+            >
+              ⚙️
+            </button>
+          </div>
+          
+          {/* Settings modal */}
+          {showSettings && (
+            <SettingsPage
+              defaultLang={defaultLang}
+              onSaveDefaultLang={handleSaveDefaultLang}
+              onClose={() => setShowSettings(false)}
+            />
+          )}
+          
+          {/* Admin modal */}
+          {showAdmin && (
+            <AdminPage
+              apiKey={apiKey}
+              onSaveKey={handleSaveKey}
+              googleTTSKey={googleTTSKey}
+              onSaveGoogleTTSKey={handleSaveGoogleTTSKey}
+              onClose={() => setShowAdmin(false)}
+              wordStore={wordStore}
+              pinnedWords={pinnedWords}
+              onDeleteUnpinned={handleDeleteUnpinned}
+            />
+          )}
+          
+          {activeSection === 'capture' && <CapturePage key={captureResetKey} onCapture={handleCapture} defaultLang={defaultLang} apiKey={apiKey} googleTTSKey={googleTTSKey} />}
+          {activeSection === 'history' && <HistoryPage wordStore={wordStore} onSelectWord={handleSelectFromHistory} pinnedWords={pinnedWords} onTogglePin={togglePin} />}
+          {activeSection === 'view' && (wordData || isLoading) && <ViewPage word={wordData} onNewCapture={handleNewCapture} onCaptureKanji={handleCapture} isLoading={isLoading} apiKey={apiKey} onRetry={() => capturedWord && handleCapture(capturedWord)} googleTTSKey={googleTTSKey} isPinned={wordData && pinnedWords.has(wordData.kanji)} onTogglePin={togglePin} />}
+          {activeSection === 'view' && !wordData && !isLoading && (
+            <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ textAlign: 'center', color: '#888' }}>
+                <span style={{ fontSize: '48px' }}>📖</span>
+                <p style={{ marginTop: '16px', fontWeight: '600' }}>No word captured yet</p>
+                <button onClick={handleNewCapture} style={{ marginTop: '16px', background: '#ffe600', border: '3px solid #000', borderRadius: '12px', padding: '12px 24px', fontWeight: '700', cursor: 'pointer' }}>Capture a word</button>
+              </div>
+            </div>
+          )}
+          {activeSection === 'practice' && (
+            <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ textAlign: 'center', color: '#888' }}><span style={{ fontSize: '48px' }}>⚔️</span><p style={{ marginTop: '16px', fontWeight: '600' }}>Practice coming soon</p></div>
+            </div>
+          )}
+          {activeSection === 'collection' && (
+            <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ textAlign: 'center', color: '#888' }}><span style={{ fontSize: '48px' }}>📚</span><p style={{ marginTop: '16px', fontWeight: '600' }}>Collection coming soon</p></div>
+            </div>
+          )}
+          <BottomNav activeSection={activeSection} onSectionChange={(id) => {
+            if (id === 'capture') setCaptureResetKey(k => k + 1);
+            setActiveSection(id);
+          }} />
+        </div>
+      );
+    };
+    
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
