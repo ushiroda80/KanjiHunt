@@ -2642,10 +2642,14 @@ Return 1-3 options max. Return ONLY the JSON array.`
       // Chrome detection: exclude Edge, Opera, etc. that also contain "Chrome"
       const isChrome = useRef(/Chrome\//.test(navigator.userAgent) && !/Edg|OPR|Brave/.test(navigator.userAgent)).current;
       // Voice capture is available via Chrome Web Speech API OR Cloud STT (any browser with MediaRecorder + Google key)
-      const hasCloudSTT = useRef(typeof MediaRecorder !== 'undefined' && !!googleTTSKey).current;
+      const hasCloudSTT = typeof MediaRecorder !== 'undefined' && !!googleTTSKey;
       const canVoiceCapture = isChrome || hasCloudSTT;
       
-      const [status, setStatus] = useState(canVoiceCapture ? 'listening' : 'manual');
+      const [status, setStatus] = useState(() => {
+        const chrome = /Chrome\//.test(navigator.userAgent) && !/Edg|OPR|Brave/.test(navigator.userAgent);
+        const cloudSTT = typeof MediaRecorder !== 'undefined' && !!googleTTSKey;
+        return (chrome || cloudSTT) ? 'listening' : 'manual';
+      });
       const [errorMessage, setErrorMessage] = useState('');
       const [timeLeft, setTimeLeft] = useState(7);
       const [transcript, setTranscript] = useState('');
@@ -3596,7 +3600,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.30.0 loaded');
+      console.log('[Kanji Hunt] v2.31.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
@@ -3718,7 +3722,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       
       return (
         <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', position: 'relative' }}>
-          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.30.0</div>
+          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.31.0</div>
           {/* Settings & Admin buttons */}
           <div style={{ position: 'fixed', top: '16px', right: '16px', zIndex: 50, display: 'flex', gap: '8px' }}>
             <button
