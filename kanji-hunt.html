@@ -941,27 +941,64 @@ Return 1-3 options max. Return ONLY the JSON array.`
                 return (
                   <div>
                     <p style={{ fontSize: '11px', color: '#666', marginBottom: '8px', lineHeight: 1.5 }}>
-                      Paste the contents of <a href="https://github.com/mifunetoshiro/kanjium/blob/master/data/source_files/raw/accents.txt" target="_blank" style={{ color: '#2563eb' }}>accents.txt</a> from Kanjium (124K words with verified pitch accent data).
-                      Click "Raw" on GitHub, select all, copy & paste below.
+                      Load pitch accent data from Kanjium (124K words). Tap the button below or paste manually.
                     </p>
-                    <textarea
-                      id="pitchDbInput"
-                      placeholder="Paste accents.txt content here (tab-separated: kanji → reading → accent number)..."
-                      style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical' }}
-                    />
-                    <button onClick={() => {
-                      const text = document.getElementById('pitchDbInput').value;
-                      if (!text.trim()) return;
-                      const count = importPitchDB(text);
-                      alert(`Imported ${count.toLocaleString()} pitch accent entries!`);
-                      setSaved(true);
-                      setTimeout(() => setSaved(false), 1500);
-                    }} style={{
-                      marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
-                      background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                    <button onClick={async () => {
+                      try {
+                        const btn = document.getElementById('pitchLoadBtn');
+                        btn.textContent = 'Loading...';
+                        btn.disabled = true;
+                        const resp = await fetch('https://raw.githubusercontent.com/ushiroda80/KanjiHunt/main/data/accents.txt');
+                        if (!resp.ok) throw new Error('File not found — upload accents.txt to your repo\'s data/ folder');
+                        const text = await resp.text();
+                        // Detect format: if it starts with { it's pre-parsed JSON, otherwise raw TSV
+                        if (text.trim().startsWith('{')) {
+                          // Already parsed JSON — store directly
+                          const db = JSON.parse(text);
+                          const count = Object.keys(db).length;
+                          localStorage.setItem('wordHunter_pitchDB', text);
+                          localStorage.setItem('wordHunter_pitchDB_meta', JSON.stringify({ count, importedAt: new Date().toISOString() }));
+                          alert(`Loaded ${count.toLocaleString()} pitch accent entries!`);
+                        } else {
+                          // Raw TSV format
+                          const count = importPitchDB(text);
+                          alert(`Imported ${count.toLocaleString()} pitch accent entries!`);
+                        }
+                        setSaved(true);
+                        setTimeout(() => setSaved(false), 1500);
+                      } catch (e) {
+                        alert('Load failed: ' + e.message);
+                      } finally {
+                        const btn = document.getElementById('pitchLoadBtn');
+                        if (btn) { btn.textContent = 'Load Pitch Data'; btn.disabled = false; }
+                      }
+                    }} id="pitchLoadBtn" style={{
+                      padding: '10px 20px', fontSize: '13px', fontWeight: '700', width: '100%',
+                      background: '#ffe600', border: '2px solid #000', borderRadius: '8px', cursor: 'pointer'
                     }}>
-                      Import Pitch Data
+                      Load Pitch Data
                     </button>
+                    <details style={{ marginTop: '12px' }}>
+                      <summary style={{ fontSize: '11px', color: '#999', cursor: 'pointer' }}>Or paste manually</summary>
+                      <textarea
+                        id="pitchDbInput"
+                        placeholder="Paste accents.txt content here (tab-separated: kanji → reading → accent number)..."
+                        style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical', marginTop: '8px' }}
+                      />
+                      <button onClick={() => {
+                        const text = document.getElementById('pitchDbInput').value;
+                        if (!text.trim()) return;
+                        const count = importPitchDB(text);
+                        alert(`Imported ${count.toLocaleString()} pitch accent entries!`);
+                        setSaved(true);
+                        setTimeout(() => setSaved(false), 1500);
+                      }} style={{
+                        marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
+                        background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                      }}>
+                        Import Pitch Data
+                      </button>
+                    </details>
                   </div>
                 );
               })()}
@@ -984,31 +1021,61 @@ Return 1-3 options max. Return ONLY the JSON array.`
                 return (
                   <div>
                     <p style={{ fontSize: '11px', color: '#666', marginBottom: '8px', lineHeight: 1.5 }}>
-                      Overrides AI-guessed JLPT levels with verified data from <a href="https://github.com/stephenmk/yomitan-jlpt-vocab" target="_blank" style={{ color: '#2563eb' }}>yomitan-jlpt-vocab</a>.
-                      Paste the contents of the pre-converted <code>jlpt_lookup.json</code> file below.
+                      Load verified JLPT levels. Overrides AI-guessed levels.
                     </p>
-                    <textarea
-                      id="jlptDbInput"
-                      placeholder='Paste JLPT lookup JSON here ({"投資":"N1","食べる":"N5",...})...'
-                      style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical' }}
-                    />
-                    <button onClick={() => {
-                      const text = document.getElementById('jlptDbInput').value;
-                      if (!text.trim()) return;
-                      const count = importJlptDB(text);
-                      if (count > 0) {
-                        alert(`Imported ${count.toLocaleString()} JLPT entries!`);
+                    <button onClick={async () => {
+                      try {
+                        const btn = document.getElementById('jlptLoadBtn');
+                        btn.textContent = 'Loading...';
+                        btn.disabled = true;
+                        const resp = await fetch('https://raw.githubusercontent.com/ushiroda80/KanjiHunt/main/data/jlpt_lookup.json');
+                        if (!resp.ok) throw new Error('File not found — upload jlpt_lookup.json to your repo\'s data/ folder');
+                        const text = await resp.text();
+                        // Validate it's parseable JSON
+                        const db = JSON.parse(text);
+                        const count = Object.keys(db).length;
+                        localStorage.setItem('wordHunter_jlptDB', JSON.stringify(db));
+                        localStorage.setItem('wordHunter_jlptDB_meta', JSON.stringify({ count, importedAt: new Date().toISOString() }));
+                        alert(`Loaded ${count.toLocaleString()} JLPT entries!`);
                         setSaved(true);
                         setTimeout(() => setSaved(false), 1500);
-                      } else {
-                        alert('Failed to parse JLPT data. Make sure it is valid JSON.');
+                      } catch (e) {
+                        alert('Load failed: ' + e.message);
+                      } finally {
+                        const btn = document.getElementById('jlptLoadBtn');
+                        if (btn) { btn.textContent = 'Load JLPT Data'; btn.disabled = false; }
                       }
-                    }} style={{
-                      marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
-                      background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                    }} id="jlptLoadBtn" style={{
+                      padding: '10px 20px', fontSize: '13px', fontWeight: '700', width: '100%',
+                      background: '#ffe600', border: '2px solid #000', borderRadius: '8px', cursor: 'pointer'
                     }}>
-                      Import JLPT Data
+                      Load JLPT Data
                     </button>
+                    <details style={{ marginTop: '12px' }}>
+                      <summary style={{ fontSize: '11px', color: '#999', cursor: 'pointer' }}>Or paste manually</summary>
+                      <textarea
+                        id="jlptDbInput"
+                        placeholder='Paste JLPT lookup JSON here ({"投資":"N1","食べる":"N5",...})...'
+                        style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical', marginTop: '8px' }}
+                      />
+                      <button onClick={() => {
+                        const text = document.getElementById('jlptDbInput').value;
+                        if (!text.trim()) return;
+                        const count = importJlptDB(text);
+                        if (count > 0) {
+                          alert(`Imported ${count.toLocaleString()} JLPT entries!`);
+                          setSaved(true);
+                          setTimeout(() => setSaved(false), 1500);
+                        } else {
+                          alert('Failed to parse JLPT data. Make sure it is valid JSON.');
+                        }
+                      }} style={{
+                        marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
+                        background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                      }}>
+                        Import JLPT Data
+                      </button>
+                    </details>
                   </div>
                 );
               })()}
@@ -1030,30 +1097,60 @@ Return 1-3 options max. Return ONLY the JSON array.`
                 return (
                   <div>
                     <p style={{ fontSize: '11px', color: '#666', marginBottom: '8px', lineHeight: 1.5 }}>
-                      Enables accurate per-character furigana for multi-kanji words. Convert <code>kanji.json</code> from <a href="https://github.com/davidluzgouveia/kanji-data" target="_blank" style={{ color: '#2563eb' }}>kanji-data</a> using the converter tool, then paste the output below.
+                      Load kanji readings for accurate per-character furigana.
                     </p>
-                    <textarea
-                      id="readingsDbInput"
-                      placeholder='Paste readings JSON here ({"連":["れん"],"続":["ぞく","つづ"],...})...'
-                      style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical' }}
-                    />
-                    <button onClick={() => {
-                      const text = document.getElementById('readingsDbInput').value;
-                      if (!text.trim()) return;
-                      const count = importReadingsDB(text);
-                      if (count > 0) {
-                        alert(`Imported ${count.toLocaleString()} kanji readings!`);
+                    <button onClick={async () => {
+                      try {
+                        const btn = document.getElementById('readingsLoadBtn');
+                        btn.textContent = 'Loading...';
+                        btn.disabled = true;
+                        const resp = await fetch('https://raw.githubusercontent.com/ushiroda80/KanjiHunt/main/data/readings.json');
+                        if (!resp.ok) throw new Error('File not found — upload readings.json to your repo\'s data/ folder');
+                        const text = await resp.text();
+                        const db = JSON.parse(text);
+                        const count = Object.keys(db).length;
+                        localStorage.setItem('wordHunter_readingsDB', JSON.stringify(db));
+                        localStorage.setItem('wordHunter_readingsDB_meta', JSON.stringify({ count, importedAt: new Date().toISOString() }));
+                        alert(`Loaded ${count.toLocaleString()} kanji readings!`);
                         setSaved(true);
                         setTimeout(() => setSaved(false), 1500);
-                      } else {
-                        alert('Failed to parse readings data. Make sure it is valid JSON.');
+                      } catch (e) {
+                        alert('Load failed: ' + e.message);
+                      } finally {
+                        const btn = document.getElementById('readingsLoadBtn');
+                        if (btn) { btn.textContent = 'Load Readings Data'; btn.disabled = false; }
                       }
-                    }} style={{
-                      marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
-                      background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                    }} id="readingsLoadBtn" style={{
+                      padding: '10px 20px', fontSize: '13px', fontWeight: '700', width: '100%',
+                      background: '#ffe600', border: '2px solid #000', borderRadius: '8px', cursor: 'pointer'
                     }}>
-                      Import Readings Data
+                      Load Readings Data
                     </button>
+                    <details style={{ marginTop: '12px' }}>
+                      <summary style={{ fontSize: '11px', color: '#999', cursor: 'pointer' }}>Or paste manually</summary>
+                      <textarea
+                        id="readingsDbInput"
+                        placeholder='Paste readings JSON here ({"連":["れん"],"続":["ぞく","つづ"],...})...'
+                        style={{ width: '100%', height: '80px', fontSize: '11px', border: '2px solid #ddd', borderRadius: '8px', padding: '8px', fontFamily: 'monospace', resize: 'vertical', marginTop: '8px' }}
+                      />
+                      <button onClick={() => {
+                        const text = document.getElementById('readingsDbInput').value;
+                        if (!text.trim()) return;
+                        const count = importReadingsDB(text);
+                        if (count > 0) {
+                          alert(`Imported ${count.toLocaleString()} kanji readings!`);
+                          setSaved(true);
+                          setTimeout(() => setSaved(false), 1500);
+                        } else {
+                          alert('Failed to parse readings data. Make sure it is valid JSON.');
+                        }
+                      }} style={{
+                        marginTop: '8px', padding: '8px 16px', fontSize: '12px', fontWeight: '700',
+                        background: '#ffe600', border: '2px solid #000', borderRadius: '6px', cursor: 'pointer'
+                      }}>
+                        Import Readings Data
+                      </button>
+                    </details>
                   </div>
                 );
               })()}
@@ -3592,7 +3689,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.34.0 loaded');
+      console.log('[Kanji Hunt] v2.36.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
@@ -3714,7 +3811,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       
       return (
         <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', position: 'relative' }}>
-          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.34.0</div>
+          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.36.0</div>
           {/* Settings & Admin buttons */}
           <div style={{ position: 'fixed', top: '16px', right: '16px', zIndex: 50, display: 'flex', gap: '8px' }}>
             <button
