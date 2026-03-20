@@ -718,16 +718,19 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // SETTINGS PAGE
     // ============================================
     
-    const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose }) => {
+    const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, apiKey, onSaveKey, googleTTSKey, onSaveGoogleTTSKey, wordStore, pinnedWords, onDeleteUnpinned }) => {
       const [selectedLang, setSelectedLang] = useState(defaultLang);
       const [tipsOn, setTipsOn] = useState(() => getTipsEnabled() && !getTipsPermanentlyDismissed());
       const [saved, setSaved] = useState(false);
+      const [inputKey, setInputKey] = useState(apiKey || '');
+      const [inputGoogleKey, setInputGoogleKey] = useState(googleTTSKey || '');
       
       const handleSave = () => {
         onSaveDefaultLang(selectedLang);
+        onSaveKey(inputKey);
+        onSaveGoogleTTSKey(inputGoogleKey);
         setTipsEnabled(tipsOn);
         if (tipsOn) {
-          // Re-enabling tips: clear permanent dismiss and reset trigger count
           setTipsPermanentlyDismissed(false);
           setTipTriggerCount(0);
         }
@@ -735,103 +738,178 @@ Return 1-3 options max. Return ONLY the JSON array.`
         setTimeout(() => setSaved(false), 2000);
       };
       
+      const pitchMeta = getPitchDBMeta();
+      const jlptMeta = getJlptDBMeta();
+      const readingsMeta = getReadingsDBMeta();
+      
+      const SRow = ({ icon, iconColor, label, sub, right, children }) => (
+        <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', gap: '12px', borderBottom: '1px solid #f5f5f5' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: iconColor || '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 }}>{icon}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '14px', fontWeight: '500', color: '#1a1a2e' }}>{label}</div>
+            {sub && <div style={{ fontSize: '11px', color: '#888', marginTop: '1px' }}>{sub}</div>}
+            {children}
+          </div>
+          {right}
+        </div>
+      );
+      
+      const SGroup = ({ label }) => (
+        <div style={{ fontSize: '11px', fontWeight: '700', color: '#5f6368', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '20px', marginBottom: '8px', paddingLeft: '4px' }}>{label}</div>
+      );
+      
+      const SCard = ({ children }) => (
+        <div style={{ background: '#fff', borderRadius: '14px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>{children}</div>
+      );
+      
       return (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.8)', zIndex: 200,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: '24px'
+          background: '#fafafa', zIndex: 200, overflowY: 'auto',
+          padding: '20px 20px 100px'
         }}>
-          <div style={{
-            background: '#fff', borderRadius: '16px', padding: '24px',
-            width: '100%', maxWidth: '360px', position: 'relative',
-            maxHeight: '85vh', overflowY: 'auto'
-          }}>
-            <button onClick={onClose} style={{
-              position: 'absolute', top: '12px', right: '12px',
-              background: 'none', border: 'none', fontSize: '24px',
-              cursor: 'pointer', color: '#888'
-            }}>×</button>
-            
-            <h2 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '8px' }}>Settings</h2>
-            <p style={{ fontSize: '13px', color: '#666', marginBottom: '20px' }}>
-              Customize your Kanji Hunt experience.
-            </p>
-            
-            <label style={{ fontSize: '12px', fontWeight: '600', color: '#333' }}>
-              Default Capture Language
-            </label>
-            <p style={{ fontSize: '11px', color: '#999', marginTop: '4px', marginBottom: '10px', lineHeight: 1.4 }}>
-              The toggle resets to this each time you start a new capture.
-            </p>
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-              {[
-                { id: 'ja', flag: '🇯🇵', label: 'Japanese', desc: 'For intermediate+ learners' },
-                { id: 'en', flag: '🇺🇸', label: 'English', desc: 'For beginners' }
-              ].map(lang => (
-                <button
-                  key={lang.id}
-                  onClick={() => setSelectedLang(lang.id)}
-                  style={{
-                    flex: 1, padding: '12px 8px', borderRadius: '10px', cursor: 'pointer',
-                    border: selectedLang === lang.id ? '3px solid #000' : '2px solid #ddd',
-                    background: selectedLang === lang.id ? '#ffe600' : '#f8f8f8',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
-                    boxShadow: selectedLang === lang.id ? '3px 3px 0 #000' : 'none',
-                    transform: selectedLang === lang.id ? 'translate(-1px, -1px)' : 'none',
-                    transition: 'all 0.1s ease'
-                  }}
-                >
-                  <span style={{ fontSize: '24px' }}>{lang.flag}</span>
-                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#000' }}>{lang.label}</span>
-                  <span style={{ fontSize: '10px', color: '#888' }}>{lang.desc}</span>
-                </button>
-              ))}
+          <div style={{ maxWidth: '430px', margin: '0 auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
+              <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
             
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontSize: '12px', fontWeight: '600', color: '#333' }}>
-                Voice Capture Tips
-              </label>
-              <p style={{ fontSize: '11px', color: '#999', marginTop: '4px', marginBottom: '10px', lineHeight: 1.4 }}>
-                Show helpful tips when voice recognition has trouble.
-              </p>
-              <button
-                onClick={() => setTipsOn(!tipsOn)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '10px',
-                  padding: '10px 14px', borderRadius: '10px', cursor: 'pointer',
-                  border: '2px solid ' + (tipsOn ? '#000' : '#ddd'),
-                  background: tipsOn ? '#ffe600' : '#f8f8f8',
-                  boxShadow: tipsOn ? '2px 2px 0 #000' : 'none',
-                  transform: tipsOn ? 'translate(-1px, -1px)' : 'none',
-                  transition: 'all 0.1s ease', width: '100%',
-                }}
-              >
-                <span style={{ fontSize: '18px' }}>{tipsOn ? '💡' : '🔇'}</span>
-                <span style={{ fontSize: '13px', fontWeight: '700', color: '#000' }}>{tipsOn ? 'Tips enabled' : 'Tips disabled'}</span>
-              </button>
-            </div>
+            <SGroup label="Preferences" />
+            <SCard>
+              <SRow icon="🌐" iconColor="#dbeafe" label="Default Language" sub="Capture page starting language">
+                <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                  {[{ id: 'ja', flag: '🇯🇵', label: 'Japanese' }, { id: 'en', flag: '🇺🇸', label: 'English' }].map(lang => (
+                    <button key={lang.id} onClick={() => setSelectedLang(lang.id)} style={{
+                      padding: '6px 14px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                      background: selectedLang === lang.id ? '#1a1a2e' : '#f0f0f0',
+                      color: selectedLang === lang.id ? '#fff' : '#5f6368',
+                      fontSize: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px'
+                    }}>{lang.flag} {lang.label}</button>
+                  ))}
+                </div>
+              </SRow>
+              <SRow icon="💡" iconColor="#fef3c7" label="Voice Tips" sub="Show tips when voice recognition struggles"
+                right={
+                  <div onClick={() => setTipsOn(!tipsOn)} style={{
+                    width: '44px', height: '26px', borderRadius: '13px', cursor: 'pointer',
+                    background: tipsOn ? '#4ade80' : '#ddd', position: 'relative', transition: 'background 0.2s', flexShrink: 0
+                  }}>
+                    <div style={{
+                      width: '22px', height: '22px', borderRadius: '50%', background: '#fff',
+                      position: 'absolute', top: '2px', transition: 'left 0.2s',
+                      left: tipsOn ? '20px' : '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.15)'
+                    }}/>
+                  </div>
+                }
+              />
+            </SCard>
+            
+            <SGroup label="API Keys" />
+            <SCard>
+              <SRow icon="🤖" iconColor="#ede9fe" label="Claude API Key" sub={inputKey ? 'Configured' : 'Required for word data'}>
+                <input type="password" value={inputKey} onChange={e => setInputKey(e.target.value)}
+                  placeholder="sk-ant-..."
+                  style={{ width: '100%', marginTop: '8px', padding: '8px 10px', fontSize: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', fontFamily: 'monospace' }}
+                />
+              </SRow>
+              <SRow icon="🔊" iconColor="#dbeafe" label="Google Cloud API Key" sub={inputGoogleKey ? 'Configured — TTS + STT' : 'Required for voice features'}>
+                <input type="password" value={inputGoogleKey} onChange={e => setInputGoogleKey(e.target.value)}
+                  placeholder="AIza..."
+                  style={{ width: '100%', marginTop: '8px', padding: '8px 10px', fontSize: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', fontFamily: 'monospace' }}
+                />
+              </SRow>
+            </SCard>
+            
+            <SGroup label="Databases" />
+            <SCard>
+              <SRow icon="📚" iconColor={pitchMeta ? '#d1fae5' : '#f0f0f0'} label="Pitch Accent" sub={pitchMeta ? `${pitchMeta.count.toLocaleString()} words loaded` : 'Not loaded'}
+                right={pitchMeta 
+                  ? <span style={{ fontSize: '12px', color: '#166534' }}>✅</span>
+                  : <button onClick={async () => {
+                      try {
+                        const resp = await fetch('https://raw.githubusercontent.com/ushiroda80/KanjiHunt/main/data/accents.txt');
+                        if (!resp.ok) throw new Error('File not found');
+                        const text = await resp.text();
+                        if (text.trim().startsWith('{')) {
+                          const db = JSON.parse(text);
+                          const count = Object.keys(db).length;
+                          localStorage.setItem('wordHunter_pitchDB', text);
+                          localStorage.setItem('wordHunter_pitchDB_meta', JSON.stringify({ count, importedAt: new Date().toISOString() }));
+                          alert(`Loaded ${count.toLocaleString()} entries!`);
+                        } else {
+                          const count = importPitchDB(text);
+                          alert(`Loaded ${count.toLocaleString()} entries!`);
+                        }
+                        setSaved(s => !s); // force re-render
+                      } catch (e) { alert('Load failed: ' + e.message); }
+                    }} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#ffe600', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Load</button>
+                }
+              />
+              <SRow icon="🏷️" iconColor={jlptMeta ? '#d1fae5' : '#f0f0f0'} label="JLPT Levels" sub={jlptMeta ? `${jlptMeta.count.toLocaleString()} entries loaded` : 'Not loaded'}
+                right={jlptMeta
+                  ? <span style={{ fontSize: '12px', color: '#166534' }}>✅</span>
+                  : <button onClick={async () => {
+                      try {
+                        const resp = await fetch('https://raw.githubusercontent.com/ushiroda80/KanjiHunt/main/data/jlpt_lookup.json');
+                        if (!resp.ok) throw new Error('File not found');
+                        const text = await resp.text();
+                        const db = JSON.parse(text);
+                        const count = Object.keys(db).length;
+                        localStorage.setItem('wordHunter_jlptDB', JSON.stringify(db));
+                        localStorage.setItem('wordHunter_jlptDB_meta', JSON.stringify({ count, importedAt: new Date().toISOString() }));
+                        alert(`Loaded ${count.toLocaleString()} entries!`);
+                        setSaved(s => !s);
+                      } catch (e) { alert('Load failed: ' + e.message); }
+                    }} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#ffe600', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Load</button>
+                }
+              />
+              <SRow icon="📖" iconColor={readingsMeta ? '#d1fae5' : '#f0f0f0'} label="Kanji Readings" sub={readingsMeta ? `${readingsMeta.count.toLocaleString()} kanji loaded` : 'Not loaded'}
+                right={readingsMeta
+                  ? <span style={{ fontSize: '12px', color: '#166534' }}>✅</span>
+                  : <button onClick={async () => {
+                      try {
+                        const resp = await fetch('https://raw.githubusercontent.com/ushiroda80/KanjiHunt/main/data/readings.json');
+                        if (!resp.ok) throw new Error('File not found');
+                        const text = await resp.text();
+                        const db = JSON.parse(text);
+                        const count = Object.keys(db).length;
+                        localStorage.setItem('wordHunter_readingsDB', JSON.stringify(db));
+                        localStorage.setItem('wordHunter_readingsDB_meta', JSON.stringify({ count, importedAt: new Date().toISOString() }));
+                        alert(`Loaded ${count.toLocaleString()} entries!`);
+                        setSaved(s => !s);
+                      } catch (e) { alert('Load failed: ' + e.message); }
+                    }} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#ffe600', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Load</button>
+                }
+              />
+            </SCard>
+            
+            <SGroup label="Data" />
+            <SCard>
+              <SRow icon="🗑️" iconColor="#fee2e2" label="Delete Unpinned Words" sub={`Keep ${pinnedWords.size} pinned, remove the rest`}
+                right={<button onClick={() => { if (confirm('Delete all unpinned words?')) onDeleteUnpinned(); }} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#fee2e2', color: '#991b1b', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Delete</button>}
+              />
+            </SCard>
+            
+            <SGroup label="About" />
+            <SCard>
+              <SRow icon="🎯" iconColor="#fef3c7" label="Kanji Hunt" sub="Hatake Development">
+                <div style={{ fontSize: '10px', color: '#bbb', marginTop: '4px' }}>v2.38.0</div>
+              </SRow>
+              <div style={{ padding: '12px 16px', fontSize: '10px', color: '#999', lineHeight: 1.8 }}>
+                <p><strong>Pitch Accent:</strong> Kanjium (CC BY-SA 4.0)</p>
+                <p><strong>Word Data:</strong> Claude API (Anthropic)</p>
+                <p><strong>TTS/STT:</strong> Google Cloud</p>
+              </div>
+            </SCard>
             
             <button onClick={handleSave} style={{
-              width: '100%', padding: '14px', fontSize: '14px', fontWeight: '700',
-              background: saved ? '#4ade80' : '#ffe600',
-              border: '3px solid #000', borderRadius: '8px', cursor: 'pointer'
+              width: '100%', padding: '14px', fontSize: '14px', fontWeight: '700', marginTop: '24px',
+              background: saved ? '#d1fae5' : '#ffe600',
+              color: saved ? '#166534' : '#000',
+              border: 'none', borderRadius: '12px', cursor: 'pointer'
             }}>
-              {saved ? '✓ Saved!' : 'Save'}
+              {saved ? '✓ Saved!' : 'Save Changes'}
             </button>
-            
-            <div style={{ marginTop: '24px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
-              <label style={{ fontSize: '11px', fontWeight: '700', color: '#444', display: 'block', marginBottom: '10px' }}>
-                📝 Data Sources & Attribution
-              </label>
-              <div style={{ fontSize: '10px', color: '#888', lineHeight: 1.8 }}>
-                <p><strong>Pitch Accent Data:</strong> Kanjium by Uros Ozvatic (<a href="https://github.com/mifunetoshiro/kanjium" target="_blank" style={{ color: '#666' }}>GitHub</a>) · Licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" style={{ color: '#666' }}>CC BY-SA 4.0</a>. Sourced from Wadoku (<a href="https://www.wadoku.de" target="_blank" style={{ color: '#666' }}>wadoku.de</a>) and EDRDG.</p>
-                <p><strong>Word Data & Examples:</strong> Generated by Claude (Anthropic) via API.</p>
-                <p><strong>Text-to-Speech:</strong> Google Cloud Text-to-Speech Neural2 voices.</p>
-                <p><strong>Speech Recognition:</strong> Web Speech API (browser-native).</p>
-              </div>
-            </div>
           </div>
         </div>
       );
@@ -3492,96 +3570,95 @@ Return 1-3 options max. Return ONLY the JSON array.`
       
       return (
         <div style={{
-          padding: '24px', paddingTop: '32px', paddingBottom: '100px', minHeight: '100vh',
-          background: '#ffe600'
+          padding: '20px', paddingTop: '28px', paddingBottom: '100px', minHeight: '100vh',
+          background: '#fafafa'
         }}>
-          <h1 style={{ fontSize: '24px', fontWeight: '800', color: '#000', marginBottom: '4px' }}>Words</h1>
-          <p style={{ fontSize: '13px', color: 'rgba(0,0,0,0.4)', marginBottom: '16px' }}>
-            {allWords.length} word{allWords.length !== 1 ? 's' : ''} captured{pinnedCount > 0 ? ` · ${pinnedCount} pinned` : ''}
-          </p>
-          
-          <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'rgba(0,0,0,0.06)', borderRadius: '10px', padding: '3px' }}>
-            {['all', 'pinned'].map(f => (
-              <button key={f} onClick={() => setFilter(f)} style={{
-                flex: 1, padding: '7px 12px', fontSize: '12px', fontWeight: '700',
-                border: 'none', borderRadius: '8px', cursor: 'pointer',
-                background: filter === f ? '#fff' : 'transparent',
-                color: filter === f ? '#000' : 'rgba(0,0,0,0.4)',
-                boxShadow: filter === f ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                transition: 'all 0.15s ease'
-              }}>
-                {f === 'all' ? 'All' : `🔖 Pinned${pinnedCount > 0 ? ` (${pinnedCount})` : ''}`}
-              </button>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>History</h1>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              {['all', 'pinned'].map(f => (
+                <button key={f} onClick={() => setFilter(f)} style={{
+                  padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: '600',
+                  border: 'none', cursor: 'pointer',
+                  background: filter === f ? '#1a1a2e' : '#f0f0f0',
+                  color: filter === f ? '#fff' : '#5f6368',
+                  transition: 'all 0.15s ease'
+                }}>
+                  {f === 'all' ? `All (${allWords.length})` : `Pinned (${pinnedCount})`}
+                </button>
+              ))}
+            </div>
           </div>
           
           {displayWords.length === 0 ? (
             <div style={{ textAlign: 'center', marginTop: '80px' }}>
-              <span style={{ fontSize: '48px', opacity: 0.5 }}>{filter === 'pinned' ? '🔖' : '📝'}</span>
-              <p style={{ marginTop: '16px', color: 'rgba(0,0,0,0.4)', fontWeight: '600', fontSize: '15px' }}>
+              <div style={{ fontSize: '48px', opacity: 0.3 }}>{filter === 'pinned' ? '★' : '📋'}</div>
+              <p style={{ marginTop: '16px', color: '#888', fontWeight: '600', fontSize: '15px' }}>
                 {filter === 'pinned' ? 'No pinned words yet' : 'No words captured yet'}
               </p>
-              <p style={{ marginTop: '8px', color: 'rgba(0,0,0,0.25)', fontSize: '13px' }}>
+              <p style={{ marginTop: '8px', color: '#bbb', fontSize: '13px' }}>
                 {filter === 'pinned' ? 'Pin words from the Learn view to save them here' : 'Captured words will appear here'}
               </p>
             </div>
           ) : (
             sections.map((section, si) => (
-              <div key={section.label} style={{ marginBottom: si < sections.length - 1 ? '28px' : '0' }}>
+              <div key={section.label} style={{ marginBottom: si < sections.length - 1 ? '24px' : '0' }}>
                 <div style={{
-                  fontSize: '11px', fontWeight: '700', color: 'rgba(0,0,0,0.35)',
-                  letterSpacing: '1.5px', textTransform: 'uppercase', marginBottom: '12px',
-                  paddingBottom: '8px', borderBottom: '1px solid rgba(0,0,0,0.08)'
+                  fontSize: '11px', fontWeight: '700', color: '#999',
+                  letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: '8px'
                 }}>
                   {section.label}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                   {section.words.map((w, i) => (
                     <button
                       key={w.word + i}
                       onClick={() => onSelectWord(w.word)}
                       style={{
-                        background: 'rgba(255,255,255,0.5)',
-                        border: '2px solid rgba(0,0,0,0.06)',
-                        borderRight: w.pinned ? '3px solid #f43f5e' : '2px solid rgba(0,0,0,0.06)',
-                        borderRadius: '12px',
-                        padding: '10px 16px',
+                        background: '#fff',
+                        border: 'none',
+                        borderRadius: '0',
+                        borderBottom: '1px solid #f0f0f0',
+                        padding: '12px 0',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '14px',
+                        gap: '12px',
                         width: '100%',
                         textAlign: 'left',
-                        transition: 'all 0.15s ease'
                       }}
-                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.8)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.5)'; e.currentTarget.style.transform = 'none'; }}
                     >
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
+                      <div style={{ width: '40%', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                         {w.hiragana && w.hiragana !== w.kanji && (
-                          <span style={{ fontSize: '10px', color: 'rgba(0,0,0,0.35)', marginBottom: '1px' }}>{w.hiragana}</span>
+                          <span style={{ fontSize: '10px', color: 'rgba(0,0,0,0.3)', marginBottom: '1px' }}>{w.hiragana}</span>
                         )}
-                        <span style={{ fontSize: '28px', fontWeight: '400', color: '#000', fontFamily: "'Noto Serif JP', serif", lineHeight: 1.1 }}>{(() => { const k = w.kanji || w.word || ''; const chars = [...k]; return chars.length > 9 ? chars.slice(0, 9).join('') + '…' : k; })()}</span>
+                        <span style={{ fontSize: '26px', fontWeight: '400', color: '#1a1a2e', fontFamily: "'Noto Serif JP', serif", lineHeight: 1.2 }}>{(() => { const k = w.kanji || w.word || ''; const chars = [...k]; return chars.length > 9 ? chars.slice(0, 9).join('') + '…' : k; })()}</span>
                       </div>
-                      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{
-                          fontSize: '22px', color: 'rgba(0,0,0,0.45)', fontWeight: '400',
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                          paddingTop: w.hiragana && w.hiragana !== w.kanji ? '10px' : '0'
+                          fontSize: '14px', color: '#333', fontWeight: '500',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
                         }}>
                           {w.english}
                         </div>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '4px', alignItems: 'center' }}>
+                          {w.jlpt && w.jlpt !== '?' && (
+                            <span style={{
+                              fontSize: '9px', fontWeight: '700', color: '#fff',
+                              background: jlptColors[w.jlpt] || '#888',
+                              padding: '1px 6px', borderRadius: '4px'
+                            }}>
+                              {w.jlpt}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      {w.jlpt && w.jlpt !== '?' && (
-                        <span style={{
-                          fontSize: '14px', fontWeight: '800', color: '#fff',
-                          background: jlptColors[w.jlpt] || '#888',
-                          padding: '5px 12px', borderRadius: '6px', flexShrink: 0
-                        }}>
-                          {w.jlpt}
-                        </span>
-                      )}
-                      <span style={{ color: 'rgba(0,0,0,0.2)', fontSize: '16px', flexShrink: 0 }}>›</span>
+                      <div
+                        onClick={(e) => { e.stopPropagation(); onTogglePin(w.kanji || w.word); }}
+                        style={{ fontSize: '18px', color: w.pinned ? '#ffe600' : '#ddd', flexShrink: 0, cursor: 'pointer', padding: '4px' }}
+                      >
+                        {w.pinned ? '★' : '☆'}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -3718,7 +3795,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.37.0 loaded');
+      console.log('[Kanji Hunt] v2.38.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
@@ -3840,7 +3917,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       
       return (
         <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', position: 'relative' }}>
-          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.37.0</div>
+          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.38.0</div>
           {/* API key button — left side, only visible to developer */}
           <div style={{ position: 'fixed', top: '16px', left: '16px', zIndex: 50 }}>
             <button
@@ -3858,12 +3935,19 @@ Return 1-3 options max. Return ONLY the JSON array.`
             </button>
           </div>
           
-          {/* Settings modal */}
+          {/* Settings page */}
           {showSettings && (
             <SettingsPage
               defaultLang={defaultLang}
               onSaveDefaultLang={handleSaveDefaultLang}
               onClose={() => setShowSettings(false)}
+              apiKey={apiKey}
+              onSaveKey={handleSaveKey}
+              googleTTSKey={googleTTSKey}
+              onSaveGoogleTTSKey={handleSaveGoogleTTSKey}
+              wordStore={wordStore}
+              pinnedWords={pinnedWords}
+              onDeleteUnpinned={handleDeleteUnpinned}
             />
           )}
           
