@@ -2618,6 +2618,32 @@ Return 1-3 options max. Return ONLY the JSON array.`
                 </div>
               )}
               <div style={{ color: 'rgba(0,0,0,0.4)', fontSize: '13px', marginTop: '6px', fontFamily: 'monospace', fontWeight: '400' }}>{word.romaji}</div>
+              {word.pitchAccent && word.pitchAccent.length > 0 && (() => {
+                const pa = word.pitchAccent;
+                const dotSize = 4;
+                const gap = 18;
+                const highY = 4;
+                const lowY = 16;
+                const totalW = pa.length * gap;
+                const h = 24;
+                return (
+                  <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px', opacity: 0.5 }}>
+                    <svg width={totalW} height={h} viewBox={`0 0 ${totalW} ${h}`}>
+                      {pa.map((m, i) => {
+                        const cx = i * gap + gap / 2;
+                        const cy = m.pitch ? highY : lowY;
+                        const next = pa[i + 1];
+                        return (
+                          <g key={i}>
+                            {next && <line x1={cx} y1={cy} x2={(i + 1) * gap + gap / 2} y2={next.pitch ? highY : lowY} stroke="#ff3366" strokeWidth="1.5" strokeLinecap="round" />}
+                            <circle cx={cx} cy={cy} r={dotSize} fill="#ff3366" />
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                );
+              })()}
               <div style={{ color: '#000', fontSize: '18px', fontWeight: '600', textAlign: 'center', marginTop: '12px' }}>{word.english}</div>
             </div>
           </div>
@@ -3641,41 +3667,44 @@ Return 1-3 options max. Return ONLY the JSON array.`
     
     const BottomNav = ({ activeSection, onSectionChange }) => {
       const navItems = [
-        { id: 'capture', icon: '🗣️', label: 'Capture' },
-        { id: 'view', icon: '📖', label: 'Learn' },
-        { id: 'history', icon: '📝', label: 'History' },
-        { id: 'practice', icon: '⚔️', label: 'Practice' }
+        { id: 'capture', label: 'Capture', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2"/><circle cx="12" cy="12" r="3" fill={active ? '#1a1a2e' : '#5f6368'}/></svg> },
+        { id: 'view', label: 'Learn', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2" strokeLinecap="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg> },
+        { id: 'history', label: 'History', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> },
+        { id: 'practice', label: 'Practice', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2" strokeLinecap="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg> },
+        { id: 'settings', label: 'Settings', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="1.5"><path d="M12 15.5A3.5 3.5 0 018.5 12 3.5 3.5 0 0112 8.5a3.5 3.5 0 013.5 3.5 3.5 3.5 0 01-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-.98l2.11-1.65a.49.49 0 00.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65A.49.49 0 0014 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65z"/></svg> },
       ];
-      const [hoveredId, setHoveredId] = useState(null);
       return (
         <div style={{
           position: 'fixed', bottom: 0, left: 0, right: 0, background: '#fff',
-          borderTop: '1.5px solid #000', display: 'flex', justifyContent: 'center',
-          padding: '6px 12px 24px 12px', zIndex: 100
+          boxShadow: '0 -1px 3px rgba(0,0,0,0.08)', display: 'flex', justifyContent: 'center',
+          padding: '0 4px', height: '68px', zIndex: 100
         }}>
-          <div style={{ display: 'flex', gap: '6px', width: '40%', minWidth: '320px' }}>
+          <div style={{ display: 'flex', width: '100%', maxWidth: '430px', alignItems: 'stretch' }}>
           {navItems.map(item => {
             const isActive = activeSection === item.id;
-            const isHovered = hoveredId === item.id && !isActive;
             return (
               <button
                 key={item.id}
                 onClick={() => onSectionChange(item.id)}
-                onMouseEnter={() => setHoveredId(item.id)}
-                onMouseLeave={() => setHoveredId(null)}
                 style={{
-                  background: isActive ? '#ffe600' : isHovered ? '#f0f0f0' : '#f5f5f5',
-                  border: isActive ? '2px solid #000' : isHovered ? '2px solid #ccc' : '2px solid transparent',
-                  display: 'flex', flexDirection: 'row',
-                  alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px 0',
-                  cursor: 'pointer', borderRadius: '12px', flex: 1,
-                  boxShadow: isActive ? '2px 2px 0 #000' : 'none',
-                  transform: isActive ? 'translate(-1px, -1px)' : isHovered ? 'translateY(-1px)' : 'none',
-                  transition: 'all 0.1s ease'
+                  flex: 1, background: 'none', border: 'none',
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center', gap: '2px',
+                  cursor: 'pointer', padding: 0
                 }}
               >
-                <span style={{ fontSize: '20px', lineHeight: 1 }}>{item.icon}</span>
-                <span style={{ fontSize: '14px', fontWeight: '800', color: '#000' }}>{item.label}</span>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: '48px', height: '26px', borderRadius: '13px',
+                  background: isActive ? '#ffe600' : 'transparent',
+                  transition: 'background 0.2s'
+                }}>
+                  {item.icon(isActive)}
+                </div>
+                <span style={{
+                  fontSize: '11px', fontWeight: isActive ? 700 : 500,
+                  color: isActive ? '#1a1a2e' : '#5f6368'
+                }}>{item.label}</span>
               </button>
             );
           })}
@@ -3689,7 +3718,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.36.0 loaded');
+      console.log('[Kanji Hunt] v2.37.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
@@ -3811,34 +3840,21 @@ Return 1-3 options max. Return ONLY the JSON array.`
       
       return (
         <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', position: 'relative' }}>
-          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.36.0</div>
-          {/* Settings & Admin buttons */}
-          <div style={{ position: 'fixed', top: '16px', right: '16px', zIndex: 50, display: 'flex', gap: '8px' }}>
+          <div style={{ position: 'absolute', top: '2px', left: '4px', fontSize: '9px', color: '#ffe600', zIndex: 100, userSelect: 'text', fontFamily: 'monospace' }}>v2.37.0</div>
+          {/* API key button — left side, only visible to developer */}
+          <div style={{ position: 'fixed', top: '16px', left: '16px', zIndex: 50 }}>
             <button
               onClick={() => setShowAdmin(true)}
               style={{
-                width: '40px', height: '40px', borderRadius: '50%',
-                background: apiKey ? '#4ade80' : '#ffe600',
-                border: '2px solid #000', cursor: 'pointer',
+                width: '36px', height: '36px', borderRadius: '50%',
+                background: apiKey ? 'rgba(74,222,128,0.8)' : 'rgba(255,230,0,0.8)',
+                border: 'none', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '18px', boxShadow: '2px 2px 0 #000'
+                fontSize: '16px'
               }}
               title={apiKey ? 'API key configured' : 'Add API key'}
             >
               🔑
-            </button>
-            <button
-              onClick={() => setShowSettings(true)}
-              style={{
-                width: '40px', height: '40px', borderRadius: '50%',
-                background: '#f5f5f5',
-                border: '2px solid #000', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '18px', boxShadow: '2px 2px 0 #000'
-              }}
-              title="Settings"
-            >
-              ⚙️
             </button>
           </div>
           
@@ -3888,6 +3904,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
             </div>
           )}
           <BottomNav activeSection={activeSection} onSectionChange={(id) => {
+            if (id === 'settings') { setShowSettings(true); return; }
             if (id === 'capture') setCaptureResetKey(k => k + 1);
             setActiveSection(id);
           }} />
