@@ -773,7 +773,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.39.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.40.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2041,23 +2041,21 @@ Return 1-3 options max. Return ONLY the JSON array.`
             <PitchVisual pitchAccent={word.pitchAccent} activeMora={activeMora} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '10px' }}>
             {['normal', 'slow', 'superslow'].map(speed => {
               const active = isPlaying === speed;
               const label = speed === 'superslow' ? '🐢🐢🐢' : speed === 'slow' ? 'Slow' : 'Listen';
               const icon = speed === 'superslow' ? null : speed === 'slow' ? <span style={{ fontSize: '14px' }}>🐢</span> : (
-                active ? <span style={{ fontSize: '12px' }}>◼</span> : <svg width="14" height="14" viewBox="0 0 24 24" fill="rgba(0,0,0,0.7)"><polygon points="6,3 20,12 6,21" /></svg>
+                active ? <span style={{ fontSize: '12px' }}>◼</span> : <svg width="14" height="14" viewBox="0 0 24 24" fill="#1a1a2e"><polygon points="6,3 20,12 6,21" /></svg>
               );
               return (
               <button key={speed} onClick={() => handlePlay(speed)}
-                onMouseEnter={e => { if (!isPlaying) { e.currentTarget.style.background = '#ffe600'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.15)'; }}}
-                onMouseLeave={e => { if (!isPlaying) { e.currentTarget.style.background = 'rgba(255,230,0,0.35)'; e.currentTarget.style.borderColor = 'rgba(0,0,0,0.08)'; }}}
                 style={{
-                background: active ? 'rgba(0,0,0,0.04)' : 'rgba(255,230,0,0.35)',
-                color: active ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.8)',
-                border: active ? '2px solid rgba(0,0,0,0.12)' : '2px solid rgba(0,0,0,0.08)',
+                background: active ? '#ffe600' : '#f0f0f0',
+                color: '#1a1a2e',
+                border: 'none',
                 borderRadius: '12px', padding: '10px 20px',
-                fontSize: '13px', fontWeight: '700', cursor: isPlaying ? 'default' : 'pointer',
+                fontSize: '13px', fontWeight: '600', cursor: isPlaying ? 'default' : 'pointer',
                 display: 'flex', alignItems: 'center', gap: '8px',
                 transition: 'all 0.15s ease',
                 opacity: isPlaying && !active ? 0.4 : 1,
@@ -2070,7 +2068,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
             })}
             </div>
           </div>
-          <div style={{ background: 'rgba(0, 0, 0, 0.03)', borderRadius: '8px', padding: '14px', fontSize: '12px', color: '#555', lineHeight: 1.6 }}>
+          <div style={{ background: '#f8f8f8', borderRadius: '10px', padding: '12px 14px', fontSize: '12px', color: '#555', lineHeight: 1.5 }}>
             This word has a <strong>{pattern.name} pitch pattern</strong> ({pattern.japanese}). {pattern.description}
           </div>
           {word.pitchSource && (
@@ -2340,19 +2338,20 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <div style={{ color: '#000', fontSize: '18px', fontWeight: '600', textAlign: 'center', marginTop: '12px' }}>{word.english}</div>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '4px', position: 'relative', zIndex: 1 }}>
+          <div style={{ display: 'flex', marginTop: '16px', borderBottom: '1px solid #e8e8e8' }}>
             {tabs.map((tab) => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
-                flex: 1, background: activeTab === tab.id ? '#fff' : 'rgba(255,255,255,0.4)',
-                color: activeTab === tab.id ? '#000' : 'rgba(0,0,0,0.4)',
+                flex: 1, background: 'none',
+                color: activeTab === tab.id ? '#1a1a2e' : '#5f6368',
                 border: 'none',
-                borderRadius: '10px 10px 0 0', padding: '8px 8px', fontSize: '12px', fontWeight: '700',
-                cursor: 'pointer', position: 'relative', zIndex: activeTab === tab.id ? 2 : 1,
-                boxShadow: activeTab === tab.id ? '0 -2px 8px rgba(0,0,0,0.05)' : 'none'
+                borderBottom: activeTab === tab.id ? '2px solid #1a1a2e' : '2px solid transparent',
+                padding: '10px 8px', fontSize: '12px', fontWeight: activeTab === tab.id ? '700' : '600',
+                cursor: 'pointer', textAlign: 'center',
+                transition: 'all 0.15s ease'
               }}>{tab.label}</button>
             ))}
           </div>
-          <div style={{ background: '#fff', borderRadius: '0 0 20px 20px', padding: '20px', minHeight: '280px', position: 'relative', zIndex: 0, overflow: 'visible', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}>
+          <div style={{ padding: '16px 0', minHeight: '280px' }}>
             <div style={{ display: activeTab === 'define' ? 'block' : 'none' }}>
               <DefineTab word={word} />
             </div>
@@ -3291,18 +3290,18 @@ Return 1-3 options max. Return ONLY the JSON array.`
     
     const ViewPage = ({ word, onNewCapture, onCaptureKanji, isLoading, apiKey, onRetry, googleTTSKey, isPinned, onTogglePin }) => (
       <div style={{
-        padding: '24px', paddingBottom: '100px', minHeight: '100vh',
-        background: '#ffe600',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '24px'
+        padding: '16px', paddingBottom: '100px', minHeight: '100vh',
+        background: '#fafafa',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0'
       }}>
         {isLoading ? (
           <div style={{ textAlign: 'center' }}>
             <div style={{
               width: '60px', height: '60px', border: '4px solid rgba(0,0,0,0.1)',
-              borderTopColor: '#000', borderRadius: '50%',
+              borderTopColor: '#1a1a2e', borderRadius: '50%',
               animation: 'spin 1s linear infinite', margin: '0 auto'
             }}/>
-            <p style={{ marginTop: '24px', color: 'rgba(0,0,0,0.6)', fontSize: '16px', fontWeight: '600' }}>
+            <p style={{ marginTop: '24px', color: '#5f6368', fontSize: '16px', fontWeight: '600' }}>
               Looking up word...
             </p>
             <style>{`
@@ -3315,21 +3314,21 @@ Return 1-3 options max. Return ONLY the JSON array.`
           <>
             {word && word.isPlaceholder && (
               <div style={{
-                background: 'rgba(239,68,68,0.1)', border: '2px solid #ef4444',
-                borderRadius: '12px', padding: '14px 18px', width: '100%', maxWidth: '360px',
-                display: 'flex', flexDirection: 'column', gap: '8px'
+                background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
+                borderRadius: '14px', padding: '14px 18px', width: '100%', maxWidth: '360px',
+                display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px'
               }}>
                 <p style={{ fontSize: '13px', fontWeight: '700', color: '#b91c1c' }}>
                   {!apiKey ? '⚠️ No API key configured' : '⚠️ Failed to load word data'}
                 </p>
                 <p style={{ fontSize: '11px', color: '#991b1b', lineHeight: 1.4 }}>
                   {!apiKey
-                    ? 'Add your Anthropic API key in Admin (🔑 top right) to fetch real word data.'
+                    ? 'Add your API key in Settings to fetch word data.'
                     : 'The API call failed. Check your API key and try again.'}
                 </p>
                 {apiKey && onRetry && (
                   <button onClick={onRetry} style={{
-                    background: '#000', color: '#ffe600', border: 'none', borderRadius: '8px',
+                    background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: '8px',
                     padding: '8px 16px', fontSize: '12px', fontWeight: '700', cursor: 'pointer',
                     alignSelf: 'flex-start', marginTop: '4px'
                   }}>Retry</button>
@@ -3337,18 +3336,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
               </div>
             )}
             {word && <WordCard word={word} googleTTSKey={googleTTSKey} onCaptureKanji={onCaptureKanji} isPinned={isPinned} onTogglePin={onTogglePin} />}
-            <button onClick={onNewCapture}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(0,0,0,0.4)'; e.currentTarget.style.color = 'rgba(0,0,0,0.6)'; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(0,0,0,0.2)'; e.currentTarget.style.color = 'rgba(0,0,0,0.45)'; }}
-              style={{
-              marginTop: '16px', background: 'transparent', border: '2px solid rgba(0,0,0,0.2)',
-              borderRadius: '12px', padding: '14px 28px', fontSize: '14px', fontWeight: '700',
-              color: 'rgba(0,0,0,0.45)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
-              transition: 'all 0.15s ease', width: '80%', maxWidth: '320px',
-            }}>
-              <span>Capture another</span>
-              <span style={{ fontSize: '11px', fontWeight: '500', color: 'rgba(0,0,0,0.25)' }}>Speak slower for best results</span>
-            </button>
           </>
         )}
       </div>
@@ -3362,8 +3349,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
       const navItems = [
         { id: 'capture', label: 'Capture', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2"/><circle cx="12" cy="12" r="3" fill={active ? '#1a1a2e' : '#5f6368'}/></svg> },
         { id: 'view', label: 'Learn', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2" strokeLinecap="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg> },
-        { id: 'history', label: 'History', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> },
         { id: 'practice', label: 'Practice', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2" strokeLinecap="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg> },
+        { id: 'history', label: 'History', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> },
         { id: 'settings', label: 'Settings', icon: (active) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={active ? '#1a1a2e' : '#5f6368'} strokeWidth="1.5"><path d="M12 15.5A3.5 3.5 0 018.5 12 3.5 3.5 0 0112 8.5a3.5 3.5 0 013.5 3.5 3.5 3.5 0 01-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-.98l2.11-1.65a.49.49 0 00.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65A.49.49 0 0014 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65z"/></svg> },
       ];
       return (
@@ -3411,7 +3398,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.39.0 loaded');
+      console.log('[Kanji Hunt] v2.40.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
