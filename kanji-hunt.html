@@ -648,10 +648,10 @@ Return 1-3 options max. Return ONLY the JSON array.`
         recorder.start(1000);
         console.log('[CloudSTT] Recording started');
         
-        // Auto-stop after 3.5 seconds (single word capture doesn't need more)
+        // Auto-stop after 5.5 seconds
         const autoStop = setTimeout(() => {
           if (!stopped) { stopped = true; recorder.stop(); }
-        }, 3500);
+        }, 5500);
         
         stopFn = () => {
           if (!stopped) { stopped = true; clearTimeout(autoStop); recorder.stop(); }
@@ -773,7 +773,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.40.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.41.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2949,15 +2949,29 @@ Return 1-3 options max. Return ONLY the JSON array.`
           
           {status === 'listening' && (
             <>
-              <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: isJaMode ? 'rgba(255, 51, 102, 0.2)' : 'rgba(96, 165, 250, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: listeningReady ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: listeningReady ? 1 : 0.25 }}>
+              <div onClick={() => { if (speechMethod === 'cloudSTT' && activeRecRef.current) { capLog('👆 Tap to submit'); activeRecRef.current.stop(); } }}
+                style={{ width: '120px', height: '120px', borderRadius: '50%', background: isJaMode ? 'rgba(255, 51, 102, 0.2)' : 'rgba(96, 165, 250, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: listeningReady ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: listeningReady ? 1 : 0.25, cursor: speechMethod === 'cloudSTT' ? 'pointer' : 'default' }}>
                 <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: isJaMode ? '#ff3366' : '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: listeningReady ? 1 : 0.25 }}>
                   <div style={{ width: '24px', height: '24px', borderRadius: '4px', background: '#fff' }}/>
                 </div>
               </div>
-              <p style={{ marginTop: '32px', fontSize: '20px', fontWeight: '700', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)' }}>Recording {isJaMode ? 'Japanese' : 'English'}...</p>
-              <p style={{ marginTop: '12px', fontSize: '15px', color: 'rgba(255,255,255,0.6)', opacity: listeningReady ? 1 : 0 }}>
-                {isJaMode ? 'Say a word in Japanese' : 'Say a word in English'}
-              </p>
+              {(() => {
+                // Fade logic for Cloud STT: recording text fades 2-5s, hint brightens
+                const elapsed = (7 - timeLeft);
+                const isCloud = speechMethod === 'cloudSTT';
+                const fadeProgress = isCloud ? Math.min(1, Math.max(0, (elapsed - 2) / 3)) : 0;
+                const recOpacity = isCloud ? 1 - (fadeProgress * 0.85) : 1;
+                const hintOpacity = isCloud ? 0.5 + (fadeProgress * 0.4) : 0.6;
+                const hintWeight = isCloud && fadeProgress > 0.5 ? '600' : '400';
+                return (
+                  <>
+                    <p style={{ marginTop: '32px', fontSize: '20px', fontWeight: '700', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)', opacity: listeningReady ? recOpacity : 0.1, transition: 'opacity 0.3s' }}>Recording {isJaMode ? 'Japanese' : 'English'}...</p>
+                    <p style={{ marginTop: '12px', fontSize: '15px', color: `rgba(255,255,255,${listeningReady ? hintOpacity : 0})`, fontWeight: hintWeight, transition: 'all 0.3s' }}>
+                      {isCloud ? 'Tap circle when done' : isJaMode ? 'Say a word in Japanese' : 'Say a word in English'}
+                    </p>
+                  </>
+                );
+              })()}
               {transcript && <p style={{ marginTop: '24px', fontSize: '32px', fontWeight: '800', color: '#ffe600' }}>{transcript}</p>}
               <p style={{ marginTop: '24px', fontSize: '14px', color: 'rgba(255,255,255,0.4)' }}>{timeLeft}s</p>
               <button onClick={() => { capLog('👆 "Type instead" clicked'); gotFinalRef.current = true; stopCurrentRecognition(); setStatus('manual'); setErrorMessage(''); }} style={{
@@ -3398,7 +3412,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.40.0 loaded');
+      console.log('[Kanji Hunt] v2.41.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
