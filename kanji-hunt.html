@@ -614,22 +614,31 @@ Return 1-3 options max. Return ONLY the JSON array.`
           clearTimeout(stopTimer);
           recording = false;
           if (chunks.length === 0) return reject(new Error('no-audio'));
-          const blob = new Blob(chunks, { type: mimeType });
           const recMs = Date.now() - captureT0;
-          logMsg('🔴 Stopped. ' + blob.size + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks');
+          const totalSize = chunks.reduce((s, c) => s + c.size, 0);
+          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks');
           
-          // Entire post-stop pipeline runs in Web Worker (off main thread)
+          // Entire post-stop pipeline in Web Worker — including blob assembly
           const workerCode = `
             self.onmessage = async function(e) {
               const t0 = Date.now();
-              const { audioData, googleKey, lang, mimeType } = e.data;
+              const { chunkBuffers, googleKey, lang, mimeType } = e.data;
               try {
+                // Reassemble audio from chunk ArrayBuffers
+                let totalLen = 0;
+                for (let i = 0; i < chunkBuffers.length; i++) totalLen += chunkBuffers[i].byteLength;
+                const merged = new Uint8Array(totalLen);
+                let offset = 0;
+                for (let i = 0; i < chunkBuffers.length; i++) {
+                  merged.set(new Uint8Array(chunkBuffers[i]), offset);
+                  offset += chunkBuffers[i].byteLength;
+                }
+                
                 // b64 encode
-                const bytes = new Uint8Array(audioData);
                 const CHUNK = 8192;
                 let bin = '';
-                for (let i = 0; i < bytes.length; i += CHUNK) {
-                  bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+                for (let i = 0; i < merged.length; i += CHUNK) {
+                  bin += String.fromCharCode.apply(null, merged.subarray(i, i + CHUNK));
                 }
                 const b64 = btoa(bin);
                 const b64Ms = Date.now() - t0;
@@ -659,7 +668,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
                 const fetchMs = Date.now() - fetchT0;
                 const totalMs = Date.now() - t0;
                 
-                // Parse result
+                // Parse
                 let transcript = '', alternatives = [], confidence = 0;
                 if (data.results && data.results.length > 0) {
                   const alts = (data.results[0].alternatives || []).map(function(a) { return { transcript: a.transcript || '', confidence: a.confidence || 0 }; });
@@ -667,7 +676,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
                   alternatives = alts.slice(0, 3);
                   confidence = alts[0] ? alts[0].confidence : 0;
                 }
-                
                 self.postMessage({ ok: true, transcript, alternatives, confidence, b64Ms, fetchMs, totalMs });
               } catch(err) {
                 self.postMessage({ error: 'stt-network-error' });
@@ -677,15 +685,20 @@ Return 1-3 options max. Return ONLY the JSON array.`
           
           const pipelineT0 = Date.now();
           try {
-            const ab = await blob.arrayBuffer();
+            // Convert Blob chunks to ArrayBuffers on main thread (fast, just pointers)
+            const chunkBuffers = await Promise.all(chunks.map(c => c.arrayBuffer()));
+            const abMs = Date.now() - pipelineT0;
+            logMsg('⏱ chunks→AB: ' + abMs + 'ms');
+            
             const wBlob = new Blob([workerCode], { type: 'application/javascript' });
             const wUrl = URL.createObjectURL(wBlob);
             const worker = new Worker(wUrl);
             
+            // Transfer all ArrayBuffers (zero-copy)
             const result = await new Promise((res, rej) => {
               worker.onmessage = (e) => { res(e.data); worker.terminate(); URL.revokeObjectURL(wUrl); };
               worker.onerror = (err) => { rej(new Error('worker-error')); worker.terminate(); URL.revokeObjectURL(wUrl); };
-              worker.postMessage({ audioData: ab, googleKey, lang, mimeType }, [ab]);
+              worker.postMessage({ chunkBuffers, googleKey, lang, mimeType }, chunkBuffers);
             });
             
             const pipelineMs = Date.now() - pipelineT0;
@@ -695,7 +708,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               return reject(new Error(result.error));
             }
             
-            logMsg('⏱ Worker pipeline: b64=' + result.b64Ms + 'ms, api=' + result.fetchMs + 'ms, worker total=' + result.totalMs + 'ms, main thread=' + pipelineMs + 'ms');
+            logMsg('⏱ Worker: b64=' + result.b64Ms + 'ms, api=' + result.fetchMs + 'ms, worker=' + result.totalMs + 'ms | Main: AB=' + abMs + 'ms, total=' + pipelineMs + 'ms');
             resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence });
           } catch(e) {
             logMsg('❌ Pipeline error: ' + e.message);
@@ -825,7 +838,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.52.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.53.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -3590,7 +3603,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.52.0 loaded');
+      console.log('[Kanji Hunt] v2.53.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
