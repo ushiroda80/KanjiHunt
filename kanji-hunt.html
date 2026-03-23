@@ -846,7 +846,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.48.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.48.1 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2760,7 +2760,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
             const elapsed = Date.now() - recStartTimeRef.current;
             capLog(`✅ CloudSTT result: "${result.transcript}" (${result.alternatives.length} alts, conf: ${Math.round(result.confidence * 100)}%, elapsed: ${elapsed}ms)`);
             
-            const text = (result.transcript || '').replace(/\s+/g, '');
+            const text = currentLang === 'ja' ? (result.transcript || '').replace(/\s+/g, '') : (result.transcript || '');
             const reading = extractReading(text, result.alternatives, currentLang);
             
             handleRecordingResult({
@@ -3519,7 +3519,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.48.0 loaded');
+      console.log('[Kanji Hunt] v2.48.1 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
