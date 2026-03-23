@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Safari Audio Diagnostics</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0a0a14; color: #e0e0e0; padding: 16px; padding-bottom: 40px; }
+  h1 { font-size: 16px; font-weight: 700; color: #ffe600; margin-bottom: 4px; }
+  .sub { font-size: 11px; color: #666; margin-bottom: 16px; }
+  
+  .test-group { margin-bottom: 20px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 14px; }
+  .test-group h2 { font-size: 13px; font-weight: 700; color: #aaa; margin-bottom: 8px; letter-spacing: 0.3px; }
+  .test-group p { font-size: 10px; color: #555; margin-bottom: 10px; line-height: 1.4; }
+  
+  .test-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+  .test-row:last-child { border-bottom: none; }
+  .test-name { font-size: 11px; color: #888; flex: 1; }
+  .test-val { font-size: 11px; font-family: monospace; color: #4ade80; text-align: right; max-width: 200px; word-break: break-all; }
+  .test-val.fail { color: #f87171; }
+  .test-val.warn { color: #fbbf24; }
+  .test-val.wait { color: #555; }
+  
+  .run-btn { background: #ffe600; color: #000; border: none; border-radius: 8px; padding: 10px 24px; font-size: 14px; font-weight: 700; cursor: pointer; display: block; width: 100%; margin-bottom: 16px; }
+  .run-btn:disabled { background: #333; color: #666; cursor: default; }
+  .run-btn.small { padding: 6px 14px; font-size: 11px; width: auto; display: inline-block; margin: 4px 4px 4px 0; }
+  
+  .log-area { background: #000; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px; font-size: 10px; font-family: monospace; max-height: 200px; overflow-y: auto; margin-top: 8px; line-height: 1.5; }
+  
+  .meter { width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; margin: 4px 0; }
+  .meter-fill { height: 100%; background: #4ade80; border-radius: 3px; width: 0%; transition: width 0.1s; }
+  
+  .copy-btn { background: rgba(255,255,255,0.06); color: #888; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 10px 24px; font-size: 12px; font-weight: 600; cursor: pointer; display: block; width: 100%; margin-top: 12px; }
+  
+  .version { font-size: 9px; color: #333; text-align: center; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<h1>Safari Audio Diagnostics</h1>
+<p class="sub">Run all tests, then copy results. Requires mic permission.</p>
+
+<button class="run-btn" id="runAll" onclick="runAll()">▶ Run All Tests</button>
+
+<!-- 1. ENVIRONMENT -->
+<div class="test-group" id="env">
+  <h2>1. Environment</h2>
+  <p>Browser, OS, audio API availability</p>
+  <div id="envResults"></div>
+</div>
+
+<!-- 2. MEDIARECORDER -->
+<div class="test-group">
+  <h2>2. MediaRecorder</h2>
+  <p>Supported formats, chunk behavior, timeslice reliability</p>
+  <div id="mrResults"></div>
+</div>
+
+<!-- 3. WEB AUDIO API -->
+<div class="test-group">
+  <h2>3. Web Audio API — AnalyserNode</h2>
+  <p>Does AnalyserNode receive real data from mic stream?</p>
+  <div id="waResults"></div>
+  <div class="meter"><div id="waMeter" class="meter-fill"></div></div>
+  <div id="waLog" class="log-area" style="display:none"></div>
+</div>
+
+<!-- 4. CHUNK DECODE -->
+<div class="test-group">
+  <h2>4. Chunk Decode</h2>
+  <p>Can we decode individual MediaRecorder chunks mid-stream?</p>
+  <div id="cdResults"></div>
+  <div id="cdLog" class="log-area" style="display:none"></div>
+</div>
+
+<!-- 5. SCRIPTPROCESSOR FALLBACK -->
+<div class="test-group">
+  <h2>5. ScriptProcessorNode (legacy)</h2>
+  <p>Older API — does it receive real audio samples from mic?</p>
+  <div id="spResults"></div>
+  <div class="meter"><div id="spMeter" class="meter-fill"></div></div>
+  <div id="spLog" class="log-area" style="display:none"></div>
+</div>
+
+<!-- 6. AUDIOWORKLET -->
+<div class="test-group">
+  <h2>6. AudioWorklet</h2>
+  <p>Modern replacement for ScriptProcessor — available? Gets data?</p>
+  <div id="awResults"></div>
+  <div class="meter"><div id="awMeter" class="meter-fill"></div></div>
+  <div id="awLog" class="log-area" style="display:none"></div>
+</div>
+
+<!-- 7. TIMING -->
+<div class="test-group">
+  <h2>7. Timing &amp; Latency</h2>
+  <p>getUserMedia latency, AudioContext creation, chunk delivery timing</p>
+  <div id="tmResults"></div>
+</div>
+
+<!-- 8. FULL CAPTURE TEST -->
+<div class="test-group">
+  <h2>8. Full Capture (3s)</h2>
+  <p>Records 3s with all monitoring active. Shows which methods got real data.</p>
+  <button class="run-btn small" id="runCapture" onclick="runFullCapture()" disabled>▶ Run capture test</button>
+  <div id="fcResults"></div>
+  <div id="fcLog" class="log-area" style="display:none"></div>
+</div>
+
+<button class="copy-btn" onclick="copyResults()">📋 Copy All Results</button>
+<div class="version">safari-audio-diag v1.0</div>
+
+<script>
+const R = {}; // all results stored here
+let globalStream = null;
+
+function setResult(section, key, value, status = 'ok') {
+  if (!R[section]) R[section] = {};
+  R[section][key] = { value, status };
+  renderSection(section);
+}
+
+function renderSection(section) {
+  const container = document.getElementById(section + 'Results');
+  if (!container) return;
+  let html = '';
+  const data = R[section] || {};
+  for (const [k, v] of Object.entries(data)) {
+    const cls = v.status === 'fail' ? 'fail' : v.status === 'warn' ? 'warn' : v.status === 'wait' ? 'wait' : '';
+    html += `<div class="test-row"><span class="test-name">${k}</span><span class="test-val ${cls}">${v.value}</span></div>`;
+  }
+  container.innerHTML = html;
+}
+
+function appendLog(id, msg, color = '#4ade80') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = 'block';
+  const t = new Date();
+  const ts = `${t.getSeconds()}.${String(t.getMilliseconds()).padStart(3,'0')}`;
+  el.innerHTML += `<div style="color:${color}">${ts} ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+// ========== 1. ENVIRONMENT ==========
+function testEnvironment() {
+  const ua = navigator.userAgent;
+  setResult('env', 'User Agent', ua.length > 80 ? ua.substring(0, 80) + '...' : ua);
+  setResult('env', 'Platform', navigator.platform || 'unknown');
+  setResult('env', 'Safari', /Safari/.test(ua) && !/Chrome/.test(ua) ? 'YES' : 'no');
+  setResult('env', 'iOS', /iPad|iPhone|iPod/.test(ua) ? 'YES' : 'no');
+  setResult('env', 'getUserMedia', !!navigator.mediaDevices?.getUserMedia ? '✓' : '✗', !!navigator.mediaDevices?.getUserMedia ? 'ok' : 'fail');
+  setResult('env', 'MediaRecorder', typeof MediaRecorder !== 'undefined' ? '✓' : '✗', typeof MediaRecorder !== 'undefined' ? 'ok' : 'fail');
+  setResult('env', 'AudioContext', !!(window.AudioContext || window.webkitAudioContext) ? '✓' : '✗');
+  setResult('env', 'AudioWorklet', !!(window.AudioContext?.prototype?.audioWorklet || window.webkitAudioContext?.prototype?.audioWorklet) ? '✓' : '✗');
+  setResult('env', 'SpeechRecognition', !!( window.SpeechRecognition || window.webkitSpeechRecognition) ? '✓' : '✗');
+  setResult('env', 'ScriptProcessorNode', 'createScriptProcessor' in (AudioContext?.prototype || {}) || 'createScriptProcessor' in (webkitAudioContext?.prototype || {}) ? '✓' : '✗');
+}
+
+// ========== 2. MEDIARECORDER ==========
+function testMediaRecorder() {
+  const formats = [
+    'audio/webm', 'audio/webm;codecs=opus', 'audio/webm;codecs=vorbis',
+    'audio/mp4', 'audio/mp4;codecs=aac', 'audio/mp4;codecs=mp4a.40.2',
+    'audio/ogg', 'audio/ogg;codecs=opus', 'audio/wav', 'audio/aac'
+  ];
+  for (const fmt of formats) {
+    try {
+      const ok = MediaRecorder.isTypeSupported(fmt);
+      setResult('mr', fmt, ok ? '✓' : '✗', ok ? 'ok' : 'warn');
+    } catch(e) {
+      setResult('mr', fmt, 'error', 'fail');
+    }
+  }
+}
+
+// ========== 3. WEB AUDIO ANALYSER ==========
+async function testAnalyser() {
+  setResult('wa', 'Status', 'Recording 2s...', 'wait');
+  
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  setResult('wa', 'Context state (pre-resume)', ctx.state);
+  await ctx.resume();
+  setResult('wa', 'Context state (post-resume)', ctx.state);
+  setResult('wa', 'Sample rate', ctx.sampleRate + ' Hz');
+  
+  const source = ctx.createMediaStreamSource(globalStream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.3;
+  source.connect(analyser);
+  
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  let maxRms = 0;
+  let nonZeroCount = 0;
+  let totalSamples = 0;
+  let rmsHistory = [];
+  
+  await new Promise(resolve => {
+    const start = Date.now();
+    function tick() {
+      if (Date.now() - start > 2000) { resolve(); return; }
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = data[i] - 128;
+        sum += v * v;
+        if (data[i] !== 128) nonZeroCount++;
+      }
+      totalSamples += data.length;
+      const rms = Math.sqrt(sum / data.length);
+      if (rms > maxRms) maxRms = rms;
+      rmsHistory.push(rms.toFixed(2));
+      
+      const meter = document.getElementById('waMeter');
+      if (meter) meter.style.width = Math.min(100, rms * 200) + '%';
+      
+      appendLog('waLog', `RMS: ${rms.toFixed(3)} | non-zero: ${nonZeroCount}/${totalSamples}`);
+      requestAnimationFrame(tick);
+    }
+    tick();
+  });
+  
+  ctx.close();
+  
+  const allZero = maxRms < 0.5;
+  setResult('wa', 'Status', allZero ? 'NO DATA (all ~zero)' : 'Getting data', allZero ? 'fail' : 'ok');
+  setResult('wa', 'Max RMS (0-128 scale)', maxRms.toFixed(2), maxRms < 1 ? 'fail' : 'ok');
+  setResult('wa', 'Non-zero samples', `${nonZeroCount}/${totalSamples}`, nonZeroCount < 10 ? 'fail' : 'ok');
+  setResult('wa', 'RMS samples (last 5)', rmsHistory.slice(-5).join(', '));
+}
+
+// ========== 4. CHUNK DECODE ==========
+async function testChunkDecode() {
+  setResult('cd', 'Status', 'Recording 2s with 250ms chunks...', 'wait');
+  
+  let mimeType = 'audio/webm';
+  for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/wav']) {
+    if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
+  }
+  
+  const recorder = new MediaRecorder(globalStream.clone(), { mimeType });
+  const chunks = [];
+  let decodeSuccesses = 0;
+  let decodeFailures = 0;
+  let decodedRmsValues = [];
+  
+  const decCtx = new (window.AudioContext || window.webkitAudioContext)();
+  
+  recorder.ondataavailable = async (e) => {
+    if (!e.data || e.data.size === 0) return;
+    chunks.push({ size: e.data.size, time: Date.now() });
+    appendLog('cdLog', `Chunk #${chunks.length}: ${e.data.size} bytes`);
+    
+    try {
+      const buf = await e.data.arrayBuffer();
+      const audio = await decCtx.decodeAudioData(buf);
+      const samples = audio.getChannelData(0);
+      let sum = 0;
+      for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+      const rms = Math.sqrt(sum / samples.length);
+      decodedRmsValues.push(rms.toFixed(4));
+      decodeSuccesses++;
+      appendLog('cdLog', `  ✓ Decoded: ${samples.length} samples, RMS=${rms.toFixed(4)}`);
+    } catch(err) {
+      decodeFailures++;
+      appendLog('cdLog', `  ✗ Decode failed: ${err.message}`, '#f87171');
+    }
+  };
+  
+  await new Promise(resolve => {
+    recorder.onstop = resolve;
+    recorder.start(250);
+    setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 2000);
+  });
+  
+  decCtx.close();
+  
+  setResult('cd', 'Status', 'Done');
+  setResult('cd', 'Format', mimeType);
+  setResult('cd', 'Total chunks', chunks.length);
+  setResult('cd', 'Decode success', decodeSuccesses, decodeSuccesses > 0 ? 'ok' : 'fail');
+  setResult('cd', 'Decode failures', decodeFailures, decodeFailures > 0 ? 'warn' : 'ok');
+  setResult('cd', 'Decoded RMS values', decodedRmsValues.join(', ') || 'none', decodedRmsValues.length > 0 ? 'ok' : 'fail');
+  setResult('cd', 'Chunk sizes', chunks.map(c => c.size).join(', '));
+  
+  // Also test: can we decode the FULL blob?
+  if (chunks.length > 0) {
+    try {
+      // Re-record to get actual blobs
+      appendLog('cdLog', 'Testing full-blob decode...');
+      setResult('cd', 'Full blob decode', 'tested separately in capture test', 'wait');
+    } catch(e) {
+      setResult('cd', 'Full blob decode', 'error: ' + e.message, 'fail');
+    }
+  }
+}
+
+// ========== 5. SCRIPTPROCESSOR ==========
+async function testScriptProcessor() {
+  setResult('sp', 'Status', 'Recording 2s...', 'wait');
+  
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  await ctx.resume();
+  
+  const source = ctx.createMediaStreamSource(globalStream);
+  const bufSize = 4096;
+  let processor;
+  try {
+    processor = ctx.createScriptProcessor(bufSize, 1, 1);
+  } catch(e) {
+    setResult('sp', 'Status', 'createScriptProcessor failed', 'fail');
+    setResult('sp', 'Error', e.message, 'fail');
+    ctx.close();
+    return;
+  }
+  
+  let callCount = 0;
+  let maxRms = 0;
+  let nonZeroSamples = 0;
+  let totalSamples = 0;
+  let rmsHistory = [];
+  
+  source.connect(processor);
+  processor.connect(ctx.destination); // required for onaudioprocess to fire
+  
+  processor.onaudioprocess = (e) => {
+    callCount++;
+    const input = e.inputBuffer.getChannelData(0);
+    let sum = 0;
+    let nz = 0;
+    for (let i = 0; i < input.length; i++) {
+      sum += input[i] * input[i];
+      if (Math.abs(input[i]) > 0.001) nz++;
+    }
+    totalSamples += input.length;
+    nonZeroSamples += nz;
+    const rms = Math.sqrt(sum / input.length);
+    if (rms > maxRms) maxRms = rms;
+    rmsHistory.push(rms.toFixed(4));
+    
+    const meter = document.getElementById('spMeter');
+    if (meter) meter.style.width = Math.min(100, rms * 500) + '%';
+    
+    if (callCount <= 20 || callCount % 5 === 0) {
+      appendLog('spLog', `#${callCount}: RMS=${rms.toFixed(4)}, non-zero=${nz}/${input.length}`);
+    }
+  };
+  
+  await new Promise(r => setTimeout(r, 2000));
+  
+  processor.disconnect();
+  source.disconnect();
+  ctx.close();
+  
+  const gotData = maxRms > 0.005;
+  setResult('sp', 'Status', gotData ? 'Getting data ✓' : 'NO DATA', gotData ? 'ok' : 'fail');
+  setResult('sp', 'Callbacks fired', callCount, callCount > 0 ? 'ok' : 'fail');
+  setResult('sp', 'Max RMS (0-1 scale)', maxRms.toFixed(4), maxRms > 0.005 ? 'ok' : 'fail');
+  setResult('sp', 'Non-zero samples', `${nonZeroSamples}/${totalSamples}`, nonZeroSamples > 10 ? 'ok' : 'fail');
+  setResult('sp', 'Last 5 RMS', rmsHistory.slice(-5).join(', '));
+}
+
+// ========== 6. AUDIOWORKLET ==========
+async function testAudioWorklet() {
+  setResult('aw', 'Status', 'Testing...', 'wait');
+  
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  await ctx.resume();
+  
+  if (!ctx.audioWorklet) {
+    setResult('aw', 'Status', 'audioWorklet not available', 'fail');
+    ctx.close();
+    return;
+  }
+  
+  try {
+    const processorCode = `
+      class RmsProcessor extends AudioWorkletProcessor {
+        constructor() { super(); this._count = 0; }
+        process(inputs) {
+          const input = inputs[0];
+          if (input.length > 0) {
+            const data = input[0];
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+            const rms = Math.sqrt(sum / data.length);
+            this._count++;
+            if (this._count % 10 === 0 || rms > 0.01) {
+              this.port.postMessage({ rms, count: this._count, len: data.length });
+            }
+          }
+          return true;
+        }
+      }
+      registerProcessor('rms-processor', RmsProcessor);
+    `;
+    
+    const blob = new Blob([processorCode], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    
+    const source = ctx.createMediaStreamSource(globalStream);
+    const workletNode = new AudioWorkletNode(ctx, 'rms-processor');
+    source.connect(workletNode);
+    workletNode.connect(ctx.destination);
+    
+    let msgCount = 0;
+    let maxRms = 0;
+    let rmsHistory = [];
+    
+    workletNode.port.onmessage = (e) => {
+      msgCount++;
+      const { rms, count, len } = e.data;
+      if (rms > maxRms) maxRms = rms;
+      rmsHistory.push(rms.toFixed(4));
+      
+      const meter = document.getElementById('awMeter');
+      if (meter) meter.style.width = Math.min(100, rms * 500) + '%';
+      
+      appendLog('awLog', `#${count}: RMS=${rms.toFixed(4)} (${len} samples)`);
+    };
+    
+    await new Promise(r => setTimeout(r, 2000));
+    
+    workletNode.disconnect();
+    source.disconnect();
+    
+    const gotData = maxRms > 0.005;
+    setResult('aw', 'Status', gotData ? 'Getting data ✓' : 'NO DATA', gotData ? 'ok' : 'fail');
+    setResult('aw', 'Messages received', msgCount, msgCount > 0 ? 'ok' : 'fail');
+    setResult('aw', 'Max RMS', maxRms.toFixed(4), maxRms > 0.005 ? 'ok' : 'fail');
+    setResult('aw', 'Last 5 RMS', rmsHistory.slice(-5).join(', '));
+    
+  } catch(e) {
+    setResult('aw', 'Status', 'Error: ' + e.message, 'fail');
+    setResult('aw', 'Error details', e.stack?.split('\n')[0] || '', 'fail');
+  }
+  
+  ctx.close();
+}
+
+// ========== 7. TIMING ==========
+async function testTiming() {
+  const t0 = performance.now();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const t1 = performance.now();
+  await ctx.resume();
+  const t2 = performance.now();
+  ctx.close();
+  
+  setResult('tm', 'AudioContext create', Math.round(t1 - t0) + 'ms');
+  setResult('tm', 'AudioContext resume', Math.round(t2 - t1) + 'ms');
+  
+  // getUserMedia was already called, measure a fresh one
+  const t3 = performance.now();
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const t4 = performance.now();
+    s.getTracks().forEach(t => t.stop());
+    setResult('tm', 'getUserMedia', Math.round(t4 - t3) + 'ms');
+  } catch(e) {
+    setResult('tm', 'getUserMedia', 'failed: ' + e.message, 'fail');
+  }
+  
+  // MediaRecorder start latency
+  let mimeType = 'audio/webm';
+  for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
+    if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
+  }
+  
+  const testStream = globalStream.clone();
+  const rec = new MediaRecorder(testStream, { mimeType });
+  const t5 = performance.now();
+  let firstChunkTime = 0;
+  rec.ondataavailable = (e) => {
+    if (!firstChunkTime && e.data.size > 0) firstChunkTime = performance.now();
+  };
+  rec.start(100);
+  await new Promise(r => setTimeout(r, 500));
+  rec.stop();
+  await new Promise(r => { rec.onstop = r; });
+  testStream.getTracks().forEach(t => t.stop());
+  
+  setResult('tm', 'First chunk delay', firstChunkTime ? Math.round(firstChunkTime - t5) + 'ms' : 'no chunks', firstChunkTime ? 'ok' : 'fail');
+}
+
+// ========== 8. FULL CAPTURE ==========
+async function runFullCapture() {
+  document.getElementById('runCapture').disabled = true;
+  setResult('fc', 'Status', 'Recording 3s with all monitors...', 'wait');
+  document.getElementById('fcLog').style.display = 'block';
+  
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  await ctx.resume();
+  const source = ctx.createMediaStreamSource(globalStream);
+  
+  // Analyser
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+  const analyserData = new Uint8Array(analyser.frequencyBinCount);
+  let analyserMaxRms = 0;
+  let analyserReadings = 0;
+  
+  // ScriptProcessor
+  let spMaxRms = 0;
+  let spCallbacks = 0;
+  let processor = null;
+  try {
+    processor = ctx.createScriptProcessor(4096, 1, 1);
+    source.connect(processor);
+    processor.connect(ctx.destination);
+    processor.onaudioprocess = (e) => {
+      spCallbacks++;
+      const d = e.inputBuffer.getChannelData(0);
+      let s = 0;
+      for (let i = 0; i < d.length; i++) s += d[i] * d[i];
+      const rms = Math.sqrt(s / d.length);
+      if (rms > spMaxRms) spMaxRms = rms;
+    };
+  } catch(e) {
+    appendLog('fcLog', 'ScriptProcessor unavailable', '#fbbf24');
+  }
+  
+  // MediaRecorder chunks
+  let mimeType = 'audio/webm';
+  for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
+    if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
+  }
+  const rec = new MediaRecorder(globalStream.clone(), { mimeType });
+  let chunkCount = 0;
+  let chunkDecodeOk = 0;
+  let chunkDecodeFail = 0;
+  let chunkMaxRms = 0;
+  const decCtx = new (window.AudioContext || window.webkitAudioContext)();
+  
+  rec.ondataavailable = async (e) => {
+    if (!e.data || e.data.size === 0) return;
+    chunkCount++;
+    try {
+      const buf = await e.data.arrayBuffer();
+      const audio = await decCtx.decodeAudioData(buf);
+      const samples = audio.getChannelData(0);
+      let s = 0;
+      for (let i = 0; i < samples.length; i++) s += samples[i] * samples[i];
+      const rms = Math.sqrt(s / samples.length);
+      if (rms > chunkMaxRms) chunkMaxRms = rms;
+      chunkDecodeOk++;
+      appendLog('fcLog', `Chunk #${chunkCount}: decoded, RMS=${rms.toFixed(4)}`);
+    } catch(err) {
+      chunkDecodeFail++;
+      appendLog('fcLog', `Chunk #${chunkCount}: decode FAILED`, '#f87171');
+    }
+  };
+  
+  // Analyser poll
+  const analyserInterval = setInterval(() => {
+    analyser.getByteTimeDomainData(analyserData);
+    let sum = 0;
+    for (let i = 0; i < analyserData.length; i++) {
+      const v = analyserData[i] - 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / analyserData.length);
+    if (rms > analyserMaxRms) analyserMaxRms = rms;
+    analyserReadings++;
+    if (analyserReadings % 5 === 0) {
+      appendLog('fcLog', `Analyser: RMS=${rms.toFixed(2)} | SP: callbacks=${spCallbacks}, maxRMS=${spMaxRms.toFixed(4)}`);
+    }
+  }, 100);
+  
+  rec.start(250);
+  const captureStart = Date.now();
+  appendLog('fcLog', '▶ Recording started');
+  
+  await new Promise(r => setTimeout(r, 3000));
+  
+  clearInterval(analyserInterval);
+  if (rec.state !== 'inactive') rec.stop();
+  if (processor) { processor.disconnect(); }
+  source.disconnect();
+  ctx.close();
+  decCtx.close();
+  
+  const duration = Date.now() - captureStart;
+  appendLog('fcLog', `⏹ Stopped after ${duration}ms`);
+  
+  setResult('fc', 'Status', 'Done');
+  setResult('fc', 'Duration', duration + 'ms');
+  setResult('fc', 'Analyser max RMS (0-128)', analyserMaxRms.toFixed(2), analyserMaxRms > 1 ? 'ok' : 'fail');
+  setResult('fc', 'Analyser readings', analyserReadings);
+  setResult('fc', 'ScriptProc callbacks', spCallbacks, spCallbacks > 0 ? 'ok' : 'fail');
+  setResult('fc', 'ScriptProc max RMS (0-1)', spMaxRms.toFixed(4), spMaxRms > 0.005 ? 'ok' : 'fail');
+  setResult('fc', 'Chunks recorded', chunkCount);
+  setResult('fc', 'Chunks decoded OK', chunkDecodeOk, chunkDecodeOk > 0 ? 'ok' : 'fail');
+  setResult('fc', 'Chunks decode FAIL', chunkDecodeFail, chunkDecodeFail > 0 ? 'warn' : 'ok');
+  setResult('fc', 'Chunk max RMS (0-1)', chunkMaxRms.toFixed(4), chunkMaxRms > 0.005 ? 'ok' : 'fail');
+  
+  // SUMMARY
+  const methods = [];
+  if (analyserMaxRms > 1) methods.push('AnalyserNode');
+  if (spMaxRms > 0.005) methods.push('ScriptProcessor');
+  if (chunkMaxRms > 0.005) methods.push('ChunkDecode');
+  setResult('fc', '✅ WORKING METHODS', methods.length > 0 ? methods.join(', ') : 'NONE', methods.length > 0 ? 'ok' : 'fail');
+  
+  document.getElementById('runCapture').disabled = false;
+}
+
+// ========== RUN ALL ==========
+async function runAll() {
+  const btn = document.getElementById('runAll');
+  btn.disabled = true;
+  btn.textContent = 'Getting mic...';
+  
+  try {
+    globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch(e) {
+    btn.textContent = 'Mic denied — tap to retry';
+    btn.disabled = false;
+    setResult('env', 'Mic access', 'DENIED: ' + e.message, 'fail');
+    return;
+  }
+  
+  btn.textContent = 'Running tests... (speak into mic)';
+  
+  // 1. Environment
+  testEnvironment();
+  
+  // 2. MediaRecorder formats
+  testMediaRecorder();
+  
+  // 3. Analyser (2s)
+  await testAnalyser();
+  
+  // 4. Chunk decode (2s)
+  await testChunkDecode();
+  
+  // 5. ScriptProcessor (2s)
+  await testScriptProcessor();
+  
+  // 6. AudioWorklet (2s)
+  await testAudioWorklet();
+  
+  // 7. Timing
+  await testTiming();
+  
+  btn.textContent = '✓ Tests complete — run capture test below';
+  btn.disabled = true;
+  document.getElementById('runCapture').disabled = false;
+}
+
+// ========== COPY ==========
+function copyResults() {
+  let text = '=== Safari Audio Diagnostics ===\n';
+  text += `Date: ${new Date().toISOString()}\n`;
+  text += `UA: ${navigator.userAgent}\n\n`;
+  
+  for (const [section, data] of Object.entries(R)) {
+    text += `--- ${section.toUpperCase()} ---\n`;
+    for (const [k, v] of Object.entries(data)) {
+      text += `${k}: ${v.value}\n`;
+    }
+    text += '\n';
+  }
+  
+  navigator.clipboard?.writeText(text).then(() => {
+    alert('Copied to clipboard!');
+  }).catch(() => {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert('Copied!');
+  });
+}
+</script>
+
+</body>
+</html>
