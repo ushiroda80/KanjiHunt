@@ -605,29 +605,35 @@ Return 1-3 options max. Return ONLY the JSON array.`
         }
         
         const doStop = () => {
-          if (!stopped) { stopped = true; clearTimeout(autoStop); recorder.stop(); }
+          if (!stopped) { stopped = true; clearTimeout(autoStop); console.log('[CloudSTT] ⏱ doStop called at', Date.now() - recStart, 'ms'); recorder.stop(); }
         };
         
         recorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) chunks.push(e.data);
+          if (e.data && e.data.size > 0) { chunks.push(e.data); console.log('[CloudSTT] ⏱ chunk', chunks.length, ':', e.data.size, 'bytes at', Date.now() - recStart, 'ms'); }
         };
         
+        const recStart = Date.now();
+        
         recorder.onstop = async () => {
+          const onstopT = Date.now();
+          console.log('[CloudSTT] ⏱ onstop fired at', onstopT - recStart, 'ms');
           stream.getTracks().forEach(t => t.stop());
           if (rafId) cancelAnimationFrame(rafId);
           if (audioCtx) { audioCtx.close(); audioCtx = null; }
           if (chunks.length === 0) return reject(new Error('no-audio'));
           
           const blob = new Blob(chunks, { type: mimeType });
-          console.log('[CloudSTT] Audio blob:', blob.size, 'bytes,', mimeType);
+          console.log('[CloudSTT] ⏱ blob assembled:', blob.size, 'bytes at', Date.now() - recStart, 'ms');
           
           // Convert to base64
+          const b64Start = Date.now();
           const base64 = await new Promise((res, rej) => {
             const reader = new FileReader();
             reader.onloadend = () => res(reader.result.split(',')[1]);
             reader.onerror = () => rej(new Error('read-failed'));
             reader.readAsDataURL(blob);
           });
+          console.log('[CloudSTT] ⏱ base64 encoded:', Date.now() - b64Start, 'ms');
           
           // Map MIME to Google STT encoding parameter
           let encoding = 'WEBM_OPUS';
@@ -636,6 +642,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
           else if (mimeType.includes('ogg')) encoding = 'OGG_OPUS';
           
           try {
+            const fetchStart = Date.now();
+            console.log('[CloudSTT] ⏱ API call start at', fetchStart - recStart, 'ms');
             const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${googleKey}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -649,10 +657,12 @@ Return 1-3 options max. Return ONLY the JSON array.`
                 audio: { content: base64 },
               }),
             });
+            console.log('[CloudSTT] ⏱ API response at', Date.now() - recStart, 'ms (fetch took', Date.now() - fetchStart, 'ms), status:', response.status);
             
             if (!response.ok) {
               if (encoding === 'WEBM_OPUS') {
                 console.warn('[CloudSTT] WEBM_OPUS failed, retrying with OGG_OPUS...');
+                const retryStart = Date.now();
                 const retry = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${googleKey}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -661,17 +671,22 @@ Return 1-3 options max. Return ONLY the JSON array.`
                     audio: { content: base64 },
                   }),
                 });
+                console.log('[CloudSTT] ⏱ Retry response at', Date.now() - recStart, 'ms (retry took', Date.now() - retryStart, 'ms)');
                 if (!retry.ok) {
                   console.error('[CloudSTT] Retry failed:', await retry.text());
                   return reject(new Error('stt-api-error'));
                 }
-                return resolve(parseSTTResults(await retry.json()));
+                const parsed = parseSTTResults(await retry.json());
+                console.log('[CloudSTT] ⏱ resolve at', Date.now() - recStart, 'ms (total from onstop:', Date.now() - onstopT, 'ms)');
+                return resolve(parsed);
               }
               console.error('[CloudSTT] API error:', await response.text());
               return reject(new Error('stt-api-error'));
             }
             
-            resolve(parseSTTResults(await response.json()));
+            const parsed = parseSTTResults(await response.json());
+            console.log('[CloudSTT] ⏱ resolve at', Date.now() - recStart, 'ms (total from onstop:', Date.now() - onstopT, 'ms)');
+            resolve(parsed);
           } catch (e) {
             console.error('[CloudSTT] Network error:', e);
             reject(new Error('stt-network-error'));
@@ -690,7 +705,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
         // Silence detection loop — updates meter DOM directly (no React re-renders)
         if (analyser) {
           const buf = new Uint8Array(analyser.frequencyBinCount);
-          const recStart = Date.now();
           (function tick() {
             if (stopped) return;
             analyser.getByteTimeDomainData(buf);
@@ -846,7 +860,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.48.1 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.48.2 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2755,14 +2769,15 @@ Return 1-3 options max. Return ONLY the JSON array.`
           
           sttPromise.then(result => {
             clearInterval(countdownId);
-            // Discard if a newer recording has started
             if (captureGenRef.current !== thisGen) { capLog('↩ Stale CloudSTT result discarded (gen ' + thisGen + ' vs ' + captureGenRef.current + ')'); return; }
             const elapsed = Date.now() - recStartTimeRef.current;
             capLog(`✅ CloudSTT result: "${result.transcript}" (${result.alternatives.length} alts, conf: ${Math.round(result.confidence * 100)}%, elapsed: ${elapsed}ms)`);
+            capLog(`⏱ .then() handler fired at ${elapsed}ms`);
             
             const text = currentLang === 'ja' ? (result.transcript || '').replace(/\s+/g, '') : (result.transcript || '');
             const reading = extractReading(text, result.alternatives, currentLang);
             
+            capLog(`⏱ calling handleRecordingResult at ${Date.now() - recStartTimeRef.current}ms`);
             handleRecordingResult({
               transcript: text,
               alternatives: result.alternatives,
@@ -3519,7 +3534,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.48.1 loaded');
+      console.log('[Kanji Hunt] v2.48.2 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
