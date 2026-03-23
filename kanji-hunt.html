@@ -554,7 +554,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // Uses MediaRecorder API (works everywhere) → sends audio to Google Cloud STT API
     // Includes silence detection via AnalyserNode for auto-stop
     const recognizeWithCloudSTT = (googleKey, lang = 'ja-JP') => {
-      const ctrl = { stop: null };
+      const ctrl = { stop: null, rms: 0 };
       const promise = new Promise(async (resolve, reject) => {
         if (!googleKey) return reject(new Error('No Google API key'));
         
@@ -701,6 +701,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
             let sum = 0;
             for (let i = 0; i < buf.length; i++) { const v = buf[i] - 128; sum += v * v; }
             const rms = Math.sqrt(sum / buf.length);
+            ctrl.rms = rms;
             const now = Date.now();
             
             if (!speechDetected) {
@@ -847,7 +848,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.46.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.47.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2544,8 +2545,25 @@ Return 1-3 options max. Return ONLY the JSON array.`
       const [showTipModal, setShowTipModal] = useState(false);
       const [debugLog, setDebugLog] = useState([]);
       const [showDebugLog, setShowDebugLog] = useState(false);
+      const [volumeLevel, setVolumeLevel] = useState(0);
       const recStartTimeRef = useRef(0);
       const hadInterimRef = useRef(false);
+      const volumeRafRef = useRef(null);
+      
+      // Poll volume from Cloud STT analyser for visual feedback
+      React.useEffect(() => {
+        if (status === 'listening' && speechMethod === 'cloudSTT') {
+          const poll = () => {
+            const rms = activeRecRef.current?.ctrl?.rms || 0;
+            setVolumeLevel(rms);
+            volumeRafRef.current = requestAnimationFrame(poll);
+          };
+          volumeRafRef.current = requestAnimationFrame(poll);
+          return () => { if (volumeRafRef.current) cancelAnimationFrame(volumeRafRef.current); };
+        } else {
+          setVolumeLevel(0);
+        }
+      }, [status, speechMethod]);
       
       const capLog = useCallback((msg, level = 'info') => {
         const elapsed = recStartTimeRef.current ? Date.now() - recStartTimeRef.current : 0;
@@ -2631,6 +2649,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       onCaptureRef.current = onCapture;
       const activeRecRef = useRef(null);
       const activeTimersRef = useRef({ timeout: null, countdown: null });
+      const captureGenRef = useRef(0);
       
       useEffect(() => { setCaptureLang(defaultLang); }, [defaultLang]);
       
@@ -2701,6 +2720,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
       // Stage 1: Start recording via appropriate speech method
       const startListening = useCallback(() => {
         stopCurrentRecognition();
+        captureGenRef.current++;
+        const thisGen = captureGenRef.current;
         setStatus('listening');
         setErrorMessage('');
         setTimeLeft(7);
@@ -2739,10 +2760,12 @@ Return 1-3 options max. Return ONLY the JSON array.`
           recStartTimeRef.current = Date.now();
           
           const sttPromise = recognizeWithCloudSTT(gKey, recognizerLang);
-          activeRecRef.current = { stop: () => sttPromise.ctrl?.stop?.(), abort: () => sttPromise.ctrl?.stop?.() };
+          activeRecRef.current = { stop: () => sttPromise.ctrl?.stop?.(), abort: () => sttPromise.ctrl?.stop?.(), ctrl: sttPromise.ctrl };
           
           sttPromise.then(result => {
             clearInterval(countdownId);
+            // Discard if a newer recording has started
+            if (captureGenRef.current !== thisGen) { capLog('↩ Stale CloudSTT result discarded (gen ' + thisGen + ' vs ' + captureGenRef.current + ')'); return; }
             const elapsed = Date.now() - recStartTimeRef.current;
             capLog(`✅ CloudSTT result: "${result.transcript}" (${result.alternatives.length} alts, conf: ${Math.round(result.confidence * 100)}%, elapsed: ${elapsed}ms)`);
             
@@ -2757,7 +2780,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
             });
           }).catch(err => {
             clearInterval(countdownId);
-            // If user intentionally stopped (type-instead), don't show error
+            // Discard if a newer recording has started
+            if (captureGenRef.current !== thisGen) { capLog('↩ Stale CloudSTT error discarded'); return; }
             if (gotFinalRef.current) { capLog('↩ CloudSTT cancelled (intentional)'); return; }
             capLog(`❌ CloudSTT error: ${err.message}`, 'error');
             if (err.message === 'mic-denied') {
@@ -3017,6 +3041,11 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <p style={{ marginTop: '8px', fontSize: '14px', color: 'rgba(255,255,255,0.4)', opacity: listeningReady ? 1 : 0 }}>
                 {isJaMode ? 'Say a word in Japanese' : 'Say a word in English'}
               </p>
+              {speechMethod === 'cloudSTT' && (
+                <div style={{ marginTop: '16px', width: '160px', height: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '2px', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', borderRadius: '2px', width: Math.min(100, volumeLevel * 8) + '%', background: volumeLevel > 4 ? '#ffe600' : 'rgba(255,255,255,0.12)', transition: 'width 0.06s' }}/>
+                </div>
+              )}
               {transcript && <p style={{ marginTop: '24px', fontSize: '32px', fontWeight: '800', color: '#ffe600' }}>{transcript}</p>}
               <p style={{ marginTop: '16px', fontSize: '13px', color: 'rgba(255,255,255,0.2)' }}>{timeLeft}s</p>
               <button onClick={() => { capLog('👆 "Type instead" clicked'); gotFinalRef.current = true; stopCurrentRecognition(); setStatus('manual'); setErrorMessage(''); }} style={{
@@ -3499,7 +3528,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.46.0 loaded');
+      console.log('[Kanji Hunt] v2.47.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
