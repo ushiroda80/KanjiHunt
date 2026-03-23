@@ -3,21 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Silence Detection v2</title>
+<title>Silence Detect v3</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; display: flex; flex-direction: column; }
+  body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; display: flex; flex-direction: column; }
   
   .tabs { display: flex; background: rgba(255,255,255,0.97); position: fixed; bottom: 0; left: 0; right: 0; height: 56px; z-index: 100; }
   .tab { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #5f6368; border: none; background: none; cursor: pointer; position: relative; }
   .tab.active { color: #1a1a2e; }
   .tab.active::after { content: ''; position: absolute; bottom: 0; left: 25%; right: 25%; height: 3px; background: #ffe600; border-radius: 2px; }
-  .version { position: fixed; bottom: 60px; left: 0; right: 0; text-align: center; font-size: 9px; color: rgba(255,255,255,0.15); z-index: 99; pointer-events: none; }
 
   .page { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; padding-bottom: 100px; min-height: 100vh; }
   .placeholder { color: rgba(255,255,255,0.2); font-size: 16px; }
   
-  .lang-toggle { display: flex; background: rgba(255,255,255,0.08); border-radius: 50px; padding: 3px; margin-bottom: 32px; }
+  .lang-toggle { display: flex; background: rgba(255,255,255,0.08); border-radius: 50px; padding: 3px; margin-bottom: 28px; }
   .lang-btn { padding: 6px 14px; border-radius: 50px; border: none; font-size: 12px; font-weight: 700; cursor: pointer; }
   .lang-ja { background: #ffe600; color: #000; }
   .lang-en { background: #60a5fa; color: #fff; }
@@ -27,414 +26,415 @@
   .mic-circle { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
   .mic-icon { width: 24px; height: 24px; border-radius: 4px; background: #fff; }
   
-  .status-text { margin-top: 28px; font-size: 18px; font-weight: 600; }
-  .hint-text { margin-top: 8px; font-size: 14px; color: rgba(255,255,255,0.4); }
-  .timer { margin-top: 12px; font-size: 13px; color: rgba(255,255,255,0.2); }
-  .result { margin-top: 24px; font-size: 28px; font-weight: 700; color: #ffe600; text-align: center; }
+  .status-text { margin-top: 24px; font-size: 18px; font-weight: 600; }
+  .hint-text { margin-top: 6px; font-size: 14px; color: rgba(255,255,255,0.4); }
+  .result { margin-top: 20px; font-size: 28px; font-weight: 700; color: #ffe600; text-align: center; }
   
-  .retry-btn { margin-top: 24px; background: transparent; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 8px 20px; color: rgba(255,255,255,0.35); font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .retry-btn { margin-top: 20px; background: transparent; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 8px 20px; color: rgba(255,255,255,0.35); font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; }
   
-  .meter-wrap { margin-top: 16px; width: 220px; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; }
-  .meter-bar { height: 100%; border-radius: 4px; transition: width 0.15s; width: 0%; background: rgba(255,255,255,0.15); }
+  /* Diagnostics */
+  .diag-strip { display: flex; gap: 8px; margin-top: 14px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .badge { font-size: 9px; font-weight: 700; letter-spacing: 0.4px; padding: 3px 8px; border-radius: 4px; }
+  .badge-wait { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.25); }
+  .badge-speech { background: rgba(255,230,0,0.15); color: #ffe600; }
+  .badge-trail { background: rgba(255,51,102,0.15); color: #ff3366; }
+  .rms-val { font-size: 10px; font-family: monospace; color: rgba(255,255,255,0.25); }
   
-  .diag { display: flex; gap: 12px; margin-top: 14px; align-items: center; }
-  .phase-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; padding: 3px 10px; border-radius: 4px; }
-  .phase-wait { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.3); }
-  .phase-speech { background: rgba(255,230,0,0.15); color: #ffe600; }
-  .phase-trail { background: rgba(255,51,102,0.15); color: #ff3366; }
-  .rms-display { font-size: 11px; font-family: monospace; color: rgba(255,255,255,0.3); min-width: 80px; }
-  .chunk-display { font-size: 10px; font-family: monospace; color: rgba(255,255,255,0.2); }
+  .meter-wrap { margin-top: 10px; width: 200px; height: 6px; background: rgba(255,255,255,0.04); border-radius: 3px; overflow: hidden; position: relative; }
+  .meter-bar { height: 100%; border-radius: 3px; width: 0%; transition: width 0.06s; }
+  /* Threshold markers */
+  .thresh-mark { position: absolute; top: -2px; bottom: -2px; width: 1px; }
   
-  .debug { position: fixed; top: 0; left: 0; right: 0; max-height: 35vh; overflow-y: auto; background: rgba(0,0,0,0.92); padding: 8px; font-size: 10px; font-family: monospace; z-index: 200; display: none; }
+  .timer { margin-top: 10px; font-size: 13px; color: rgba(255,255,255,0.2); }
+  
+  .debug { position: fixed; top: 0; left: 0; right: 0; max-height: 35vh; overflow-y: auto; background: rgba(0,0,0,0.92); padding: 6px; font-size: 9px; font-family: monospace; z-index: 200; display: none; line-height: 1.4; }
   .debug.show { display: block; }
-  .debug-toggle { position: fixed; top: 8px; right: 8px; z-index: 201; background: rgba(0,0,0,0.5); border: none; border-radius: 6px; padding: 4px 8px; font-size: 10px; color: rgba(255,255,255,0.5); cursor: pointer; }
+  .dbg-btn { position: fixed; top: 6px; right: 6px; z-index: 201; background: rgba(0,0,0,0.5); border: none; border-radius: 6px; padding: 3px 8px; font-size: 9px; color: rgba(255,255,255,0.4); cursor: pointer; }
   
-  @keyframes pulse-red { 0%,100% { box-shadow: 0 0 0 0 rgba(255,51,102,0.3); } 50% { box-shadow: 0 0 0 20px rgba(255,51,102,0); } }
-  @keyframes pulse-blue { 0%,100% { box-shadow: 0 0 0 0 rgba(96,165,250,0.3); } 50% { box-shadow: 0 0 0 20px rgba(96,165,250,0); } }
+  .version { position: fixed; bottom: 60px; left: 0; right: 0; text-align: center; font-size: 8px; color: rgba(255,255,255,0.1); pointer-events: none; }
+  
+  @keyframes pulse-red { 0%,100% { box-shadow: 0 0 0 0 rgba(255,51,102,0.25); } 50% { box-shadow: 0 0 0 18px rgba(255,51,102,0); } }
+  @keyframes pulse-blue { 0%,100% { box-shadow: 0 0 0 0 rgba(96,165,250,0.25); } 50% { box-shadow: 0 0 0 18px rgba(96,165,250,0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
 
-<button class="debug-toggle" onclick="document.getElementById('debug').classList.toggle('show')">📋 Log</button>
-<div id="debug" class="debug"></div>
+<button class="dbg-btn" onclick="document.getElementById('dbg').classList.toggle('show')">📋</button>
+<div id="dbg" class="debug"></div>
 
 <div id="capturePage" class="page"></div>
-<div id="practicePage" class="page" style="display:none;"><p class="placeholder">Practice (placeholder)</p></div>
+<div id="practicePage" class="page" style="display:none"><p class="placeholder">Practice (placeholder)</p></div>
 
-<div class="version">silence-detect v2.0</div>
+<div class="version">silence-detect v3.0</div>
 <div class="tabs">
-  <button class="tab active" id="tabCapture" onclick="switchTab('capture')">Capture</button>
-  <button class="tab" id="tabPractice" onclick="switchTab('practice')">Practice</button>
+  <button class="tab active" id="tabCap" onclick="switchTab('capture')">Capture</button>
+  <button class="tab" id="tabPrac" onclick="switchTab('practice')">Practice</button>
 </div>
 
 <script>
-  // ====================
-  // CONFIG
-  // ====================
-  const SILENCE_RMS = 0.015;
-  const SPEECH_RMS = 0.025;
-  const SILENCE_DURATION_MS = 800;
-  const MAX_RECORD_MS = 5500;
-  const MIN_SPEECH_MS = 400;
-  const CHUNK_MS = 250;
-  const GOOGLE_KEY = localStorage.getItem('wordHunter_googleTTSKey') || '';
+// ============================
+// CONFIG — tuned from diag results
+// ============================
+const SPEECH_THRESH = 4;        // RMS > this = speech (0-128 scale). Diag showed max 12.77
+const SILENCE_THRESH = 2;       // RMS < this = silence
+const SILENCE_MS = 800;         // ms of silence after speech → auto-stop
+const MIN_SPEECH_MS = 400;      // min speech duration before allowing stop
+const MAX_MS = 5500;            // hard cap
+const SMOOTHING = 0.1;          // low smoothing for fast response (diag used 0.3)
+const FFT = 512;
+const METER_SCALE = 8;          // meter width = rms * METER_SCALE %
+
+const GKEY = localStorage.getItem('wordHunter_googleTTSKey') || '';
+
+let lang = 'ja';
+let tab = 'capture';
+let recording = false;
+let stream = null;
+let recorder = null;
+let audioCtx = null;
+let analyser = null;
+let rafId = null;
+let chunks = [];
+let captureT0 = 0;
+let speechDetected = false;
+let speechT0 = 0;
+let silenceT0 = 0;
+let stopTimer = null;
+let cdTimer = null;
+let timeLeft = 6;
+
+const $ = id => document.getElementById(id);
+const log = (m, c='#4ade80') => {
+  const el = $('dbg');
+  const t = new Date();
+  el.innerHTML += `<div style="color:${c}">${t.getMinutes()}:${String(t.getSeconds()).padStart(2,'0')}.${String(t.getMilliseconds()).padStart(3,'0')} ${m}</div>`;
+  el.scrollTop = el.scrollHeight;
+};
+
+// ============================
+// TABS
+// ============================
+function switchTab(t) {
+  tab = t;
+  $('capturePage').style.display = t === 'capture' ? 'flex' : 'none';
+  $('practicePage').style.display = t === 'practice' ? 'flex' : 'none';
+  $('tabCap').classList.toggle('active', t === 'capture');
+  $('tabPrac').classList.toggle('active', t === 'practice');
+  if (t === 'capture') renderIdle();
+  if (t !== 'capture' && recording) stop('tab-switch');
+}
+
+// ============================
+// RENDER
+// ============================
+function renderIdle() {
+  const ja = lang === 'ja';
+  $('capturePage').innerHTML = `
+    <div class="lang-toggle">
+      <button class="lang-btn ${ja?'lang-ja':'lang-off'}" onclick="setLang('ja')">🇯🇵 JA</button>
+      <button class="lang-btn ${ja?'lang-off':'lang-en'}" onclick="setLang('en')">🇺🇸 EN</button>
+    </div>
+    <div class="mic-ring" onclick="startCapture()" style="background:${ja?'rgba(255,51,102,0.12)':'rgba(96,165,250,0.12)'}">
+      <div class="mic-circle" style="background:${ja?'#ff3366':'#3b82f6'}"><div class="mic-icon"></div></div>
+    </div>
+    <div class="status-text" style="color:rgba(255,255,255,0.35)">Tap to record</div>`;
+}
+
+function renderRecording() {
+  const ja = lang === 'ja';
+  const bg = ja ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)';
+  const col = ja ? '#ff3366' : '#3b82f6';
+  const anim = ja ? 'pulse-red' : 'pulse-blue';
+  // Threshold positions on meter (% of width)
+  const silPct = (SILENCE_THRESH / (128 / METER_SCALE)).toFixed(1);
+  const spPct = (SPEECH_THRESH / (128 / METER_SCALE)).toFixed(1);
   
-  let currentLang = 'ja';
-  let currentTab = 'capture';
-  let isRecording = false;
-  let mediaRecorder = null;
-  let allChunks = [];
-  let autoStopTimer = null;
-  let countdownTimer = null;
-  let timeLeft = 6;
-  let speechDetected = false;
-  let speechStart = 0;
-  let silenceStart = 0;
-  let captureStartTime = 0;
-  let chunkCount = 0;
-  let lastRms = 0;
-  let stream = null;
-  let decodeCtx = null;
+  $('capturePage').innerHTML = `
+    <div class="lang-toggle">
+      <button class="lang-btn ${ja?'lang-ja':'lang-off'}" disabled>🇯🇵 JA</button>
+      <button class="lang-btn ${ja?'lang-off':'lang-en'}" disabled>🇺🇸 EN</button>
+    </div>
+    <div class="mic-ring" onclick="stop('tap')" style="background:${bg};animation:${anim} 1.5s ease infinite;cursor:pointer">
+      <div class="mic-circle" style="background:${col}"><div class="mic-icon"></div></div>
+    </div>
+    <div class="status-text">Recording ${ja?'Japanese':'English'}...</div>
+    <div class="hint-text">Tap circle when done</div>
+    <div class="diag-strip">
+      <span id="badge" class="badge badge-wait">WAITING</span>
+      <span id="rmsVal" class="rms-val">—</span>
+    </div>
+    <div class="meter-wrap">
+      <div id="meter" class="meter-bar" style="background:rgba(255,255,255,0.15)"></div>
+      <div class="thresh-mark" style="left:${spPct}%;background:rgba(255,230,0,0.4)" title="speech"></div>
+      <div class="thresh-mark" style="left:${silPct}%;background:rgba(255,51,102,0.3)" title="silence"></div>
+    </div>
+    <div class="timer" id="timerEl">${timeLeft}s</div>`;
+}
+
+function renderProcessing() {
+  $('capturePage').innerHTML = `
+    <div style="width:44px;height:44px;border:3px solid rgba(255,255,255,0.1);border-top-color:rgba(255,255,255,0.7);border-radius:50%;animation:spin 1s linear infinite"></div>
+    <div class="status-text" style="color:rgba(255,255,255,0.3);font-size:13px;margin-top:16px">Processing...</div>`;
+}
+
+function renderResult(text, total, breakdown) {
+  const ja = lang === 'ja';
+  $('capturePage').innerHTML = `
+    <div class="lang-toggle">
+      <button class="lang-btn ${ja?'lang-ja':'lang-off'}" onclick="setLang('ja')">🇯🇵 JA</button>
+      <button class="lang-btn ${ja?'lang-off':'lang-en'}" onclick="setLang('en')">🇺🇸 EN</button>
+    </div>
+    <div class="result">${text || '(no speech detected)'}</div>
+    <div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.2)">${total}ms total</div>
+    <div style="margin-top:3px;font-size:10px;color:rgba(255,255,255,0.12)">${breakdown}</div>
+    <button class="retry-btn" onclick="startCapture()"><span style="display:inline-block;transform:scaleX(-1)">↻</span> Try again</button>`;
+}
+
+function renderError(msg) {
+  $('capturePage').innerHTML = `
+    <div style="width:56px;height:56px;border-radius:50%;background:rgba(252,165,165,0.08);display:flex;align-items:center;justify-content:center;margin-bottom:16px">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fca5a5" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+    </div>
+    <div style="font-size:14px;font-weight:600;color:#fca5a5;text-align:center;max-width:260px">${msg}</div>
+    <button class="retry-btn" onclick="startCapture()"><span style="display:inline-block;transform:scaleX(-1)">↻</span> Try again</button>`;
+}
+
+function setLang(l) { lang = l; if (!recording) renderIdle(); }
+
+// ============================
+// CAPTURE
+// ============================
+async function startCapture() {
+  if (!GKEY) { renderError('No Google API key. Add in Kanji Hunt Settings.'); return; }
   
-  const log = (msg, level = 'info') => {
-    const el = document.getElementById('debug');
-    const t = new Date();
-    const ts = `${t.getMinutes()}:${String(t.getSeconds()).padStart(2,'0')}.${String(t.getMilliseconds()).padStart(3,'0')}`;
-    const color = level === 'error' ? '#f87171' : level === 'warn' ? '#fbbf24' : '#4ade80';
-    el.innerHTML += `<div style="color:${color}">${ts} ${msg}</div>`;
-    el.scrollTop = el.scrollHeight;
-  };
+  recording = true;
+  speechDetected = false;
+  silenceT0 = 0;
+  speechT0 = 0;
+  chunks = [];
+  timeLeft = 6;
   
-  // ====================
-  // TAB SWITCHING
-  // ====================
-  function switchTab(tab) {
-    currentTab = tab;
-    document.getElementById('capturePage').style.display = tab === 'capture' ? 'flex' : 'none';
-    document.getElementById('practicePage').style.display = tab === 'practice' ? 'flex' : 'none';
-    document.getElementById('tabCapture').classList.toggle('active', tab === 'capture');
-    document.getElementById('tabPractice').classList.toggle('active', tab === 'practice');
-    if (tab === 'capture') renderIdle();
-    if (tab !== 'capture' && isRecording) stopRecording('tab-switch');
+  renderRecording();
+  log('🎙 Start (' + lang + ')');
+  
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch(e) {
+    log('❌ Mic: ' + e.message, '#f87171');
+    recording = false;
+    renderError('Mic not available');
+    return;
   }
   
-  // ====================
-  // RENDER
-  // ====================
-  const $ = id => document.getElementById(id);
+  // Audio context + analyser
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  log(`🔊 AudioCtx: ${audioCtx.state}, ${audioCtx.sampleRate}Hz`);
   
-  function renderIdle() {
-    const ja = currentLang === 'ja';
-    $('capturePage').innerHTML = `
-      <div class="lang-toggle">
-        <button class="lang-btn ${ja ? 'lang-ja' : 'lang-off'}" onclick="setLang('ja')">🇯🇵 JA</button>
-        <button class="lang-btn ${!ja ? 'lang-en' : 'lang-off'}" onclick="setLang('en')">🇺🇸 EN</button>
-      </div>
-      <div class="mic-ring" onclick="startCapture()" style="background:${ja ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)'}">
-        <div class="mic-circle" style="background:${ja ? '#ff3366' : '#3b82f6'}"><div class="mic-icon"></div></div>
-      </div>
-      <div class="status-text" style="color:rgba(255,255,255,0.4)">Tap to record</div>`;
+  const source = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = FFT;
+  analyser.smoothingTimeConstant = SMOOTHING;
+  source.connect(analyser);
+  
+  // MediaRecorder
+  let mime = 'audio/webm';
+  for (const f of ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/wav']) {
+    if (MediaRecorder.isTypeSupported(f)) { mime = f; break; }
   }
+  recorder = new MediaRecorder(stream, { mimeType: mime });
+  recorder.ondataavailable = (e) => { if (e.data?.size > 0) chunks.push(e.data); };
   
-  function renderRecording() {
-    const ja = currentLang === 'ja';
-    const c = ja ? '#ff3366' : '#3b82f6';
-    const bg = ja ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)';
-    const anim = ja ? 'pulse-red' : 'pulse-blue';
-    $('capturePage').innerHTML = `
-      <div class="lang-toggle">
-        <button class="lang-btn ${ja ? 'lang-ja' : 'lang-off'}" disabled>🇯🇵 JA</button>
-        <button class="lang-btn ${!ja ? 'lang-en' : 'lang-off'}" disabled>🇺🇸 EN</button>
-      </div>
-      <div class="mic-ring" onclick="stopRecording('tap')" style="background:${bg};animation:${anim} 1.5s ease infinite;cursor:pointer">
-        <div class="mic-circle" style="background:${c}"><div class="mic-icon"></div></div>
-      </div>
-      <div class="status-text">Recording ${ja ? 'Japanese' : 'English'}...</div>
-      <div class="hint-text">Tap circle when done</div>
-      <div class="diag">
-        <span id="phaseBadge" class="phase-badge phase-wait">WAITING</span>
-        <span id="rmsDisplay" class="rms-display">RMS: —</span>
-        <span id="chunkDisplay" class="chunk-display">#0</span>
-      </div>
-      <div class="meter-wrap"><div id="meter" class="meter-bar"></div></div>
-      <div class="timer" id="timerDisplay">${timeLeft}s</div>`;
-  }
+  captureT0 = Date.now();
   
-  function renderProcessing() {
-    $('capturePage').innerHTML = `
-      <div style="width:44px;height:44px;border:3px solid rgba(255,255,255,0.1);border-top-color:rgba(255,255,255,0.7);border-radius:50%;animation:spin 1s linear infinite"></div>
-      <div class="status-text" style="color:rgba(255,255,255,0.35);font-size:13px;margin-top:16px">Processing...</div>`;
-  }
-  
-  function renderResult(text, elapsed, breakdown) {
-    const ja = currentLang === 'ja';
-    $('capturePage').innerHTML = `
-      <div class="lang-toggle">
-        <button class="lang-btn ${ja ? 'lang-ja' : 'lang-off'}" onclick="setLang('ja')">🇯🇵 JA</button>
-        <button class="lang-btn ${!ja ? 'lang-en' : 'lang-off'}" onclick="setLang('en')">🇺🇸 EN</button>
-      </div>
-      <div class="result">${text || '(no speech detected)'}</div>
-      <div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.25)">${elapsed}ms total</div>
-      <div style="margin-top:4px;font-size:10px;color:rgba(255,255,255,0.15)">${breakdown}</div>
-      <button class="retry-btn" onclick="startCapture()">
-        <span style="display:inline-block;transform:scaleX(-1)">↻</span> Try again
-      </button>`;
-  }
-  
-  function renderError(msg) {
-    $('capturePage').innerHTML = `
-      <div style="width:64px;height:64px;border-radius:50%;background:rgba(252,165,165,0.1);display:flex;align-items:center;justify-content:center;margin-bottom:20px">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fca5a5" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-      </div>
-      <div style="font-size:15px;font-weight:600;color:#fca5a5;text-align:center;max-width:260px">${msg}</div>
-      <button class="retry-btn" onclick="startCapture()">
-        <span style="display:inline-block;transform:scaleX(-1)">↻</span> Try again
-      </button>`;
-  }
-  
-  function setLang(l) { currentLang = l; if (!isRecording) renderIdle(); }
-  
-  function updateDiag(rms, phase) {
-    const meter = $('meter');
-    const badge = $('phaseBadge');
-    const rmsEl = $('rmsDisplay');
-    const chunkEl = $('chunkDisplay');
-    if (meter) {
-      const pct = Math.min(100, rms * 1000);
-      meter.style.width = pct + '%';
-      meter.style.background = phase === 'speech' ? '#ffe600' : phase === 'trail' ? '#ff3366' : 'rgba(255,255,255,0.15)';
-    }
-    if (badge) {
-      if (phase === 'speech') { badge.textContent = 'SPEECH'; badge.className = 'phase-badge phase-speech'; }
-      else if (phase === 'trail') { badge.textContent = 'SILENCE ' + Math.round((Date.now() - silenceStart)) + 'ms'; badge.className = 'phase-badge phase-trail'; }
-      else { badge.textContent = 'WAITING'; badge.className = 'phase-badge phase-wait'; }
-    }
-    if (rmsEl) rmsEl.textContent = `RMS: ${rms.toFixed(4)}`;
-    if (chunkEl) chunkEl.textContent = `#${chunkCount}`;
-  }
-  
-  // ====================
-  // CHUNK-BASED RMS
-  // ====================
-  async function computeChunkRms(blob) {
+  recorder.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    cancelAnimationFrame(rafId);
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
+    clearTimeout(stopTimer);
+    clearInterval(cdTimer);
+    recording = false;
+    
+    if (chunks.length === 0) { renderError('No audio captured'); return; }
+    
+    const blob = new Blob(chunks, { type: mime });
+    const recMs = Date.now() - captureT0;
+    log(`🔴 Stopped. ${blob.size}b, ${recMs}ms, ${chunks.length} chunks`);
+    
+    renderProcessing();
+    const apiT0 = Date.now();
+    
     try {
-      if (!decodeCtx || decodeCtx.state === 'closed') {
-        decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      const arrayBuf = await blob.arrayBuffer();
-      const audioBuf = await decodeCtx.decodeAudioData(arrayBuf);
-      const samples = audioBuf.getChannelData(0);
-      let sum = 0;
-      for (let i = 0; i < samples.length; i++) {
-        sum += samples[i] * samples[i];
-      }
-      return Math.sqrt(sum / samples.length);
-    } catch(e) {
-      log(`⚠️ Chunk decode failed: ${e.message}`, 'warn');
-      return -1;
-    }
-  }
-  
-  // ====================
-  // CAPTURE
-  // ====================
-  async function startCapture() {
-    if (!GOOGLE_KEY) { renderError('No Google API key. Add in Kanji Hunt Settings.'); return; }
-    
-    isRecording = true;
-    speechDetected = false;
-    silenceStart = 0;
-    speechStart = 0;
-    allChunks = [];
-    chunkCount = 0;
-    timeLeft = 6;
-    lastRms = 0;
-    
-    renderRecording();
-    log(`🎙 Starting capture (${currentLang})`);
-    
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch(e) {
-      log(`❌ Mic denied: ${e.message}`, 'error');
-      isRecording = false;
-      renderError('Microphone not available');
-      return;
-    }
-    
-    let mimeType = 'audio/webm';
-    for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/wav']) {
-      if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
-    }
-    log(`📦 Format: ${mimeType}, chunk: ${CHUNK_MS}ms`);
-    
-    mediaRecorder = new MediaRecorder(stream, { mimeType });
-    captureStartTime = Date.now();
-    
-    mediaRecorder.ondataavailable = async (e) => {
-      if (!e.data || e.data.size === 0) return;
-      allChunks.push(e.data);
-      chunkCount++;
+      const b64 = await blobToB64(blob);
+      const encMs = Date.now() - apiT0;
       
-      if (!isRecording) return;
+      let enc = 'WEBM_OPUS';
+      if (mime.includes('mp4')) enc = 'ENCODING_UNSPECIFIED';
+      else if (mime.includes('wav')) enc = 'LINEAR16';
       
-      const rms = await computeChunkRms(e.data);
-      if (rms < 0) return;
+      const langCode = lang === 'ja' ? 'ja-JP' : 'en-US';
+      const fetchT0 = Date.now();
       
-      lastRms = rms;
-      const now = Date.now();
-      const elapsed = now - captureStartTime;
+      let resp = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${GKEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config: { encoding: enc, languageCode: langCode, maxAlternatives: 5, model: 'default' },
+          audio: { content: b64 },
+        }),
+      });
       
-      if (!speechDetected) {
-        if (rms > SPEECH_RMS) {
-          speechDetected = true;
-          speechStart = now;
-          silenceStart = 0;
-          log(`🗣 Speech at ${elapsed}ms (RMS: ${rms.toFixed(4)})`);
-          updateDiag(rms, 'speech');
-        } else {
-          log(`👂 #${chunkCount}: RMS=${rms.toFixed(4)} (waiting)`);
-          updateDiag(rms, 'wait');
-        }
-      } else {
-        if (rms < SILENCE_RMS) {
-          if (!silenceStart) {
-            silenceStart = now;
-            log(`🤫 Silence at ${elapsed}ms (RMS: ${rms.toFixed(4)})`);
-          }
-          const speechDur = (silenceStart || now) - speechStart;
-          const silDur = now - silenceStart;
-          updateDiag(rms, 'trail');
-          
-          if (silenceStart && silDur >= SILENCE_DURATION_MS && speechDur >= MIN_SPEECH_MS) {
-            log(`✂️ Auto-stop: ${silDur}ms silence after ${speechDur}ms speech`);
-            stopRecording('silence');
-            return;
-          }
-        } else {
-          if (silenceStart) {
-            log(`🗣 Resumed after ${now - silenceStart}ms gap (RMS: ${rms.toFixed(4)})`);
-          }
-          silenceStart = 0;
-          updateDiag(rms, 'speech');
-        }
-      }
-    };
-    
-    mediaRecorder.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop());
-      clearTimeout(autoStopTimer);
-      clearInterval(countdownTimer);
-      isRecording = false;
-      
-      if (allChunks.length === 0) { renderError('No audio captured'); return; }
-      
-      const blob = new Blob(allChunks, { type: mimeType });
-      const recDur = Date.now() - captureStartTime;
-      log(`🔴 Stopped. ${blob.size} bytes, ${recDur}ms, ${allChunks.length} chunks`);
-      
-      renderProcessing();
-      const apiStart = Date.now();
-      
-      try {
-        const base64 = await blobToBase64(blob);
-        const encodeTime = Date.now() - apiStart;
-        
-        let encoding = 'WEBM_OPUS';
-        if (mimeType.includes('mp4') || mimeType.includes('m4a')) encoding = 'ENCODING_UNSPECIFIED';
-        else if (mimeType.includes('wav')) encoding = 'LINEAR16';
-        
-        const langCode = currentLang === 'ja' ? 'ja-JP' : 'en-US';
-        const fetchStart = Date.now();
-        
-        let resp = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${GOOGLE_KEY}`, {
+      if (!resp.ok && enc === 'WEBM_OPUS') {
+        log('⚠️ Retry OGG', '#fbbf24');
+        resp = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${GKEY}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            config: { encoding, languageCode: langCode, maxAlternatives: 5, model: 'default' },
-            audio: { content: base64 },
+            config: { encoding: 'OGG_OPUS', languageCode: langCode, maxAlternatives: 5 },
+            audio: { content: b64 },
           }),
         });
-        
-        if (!resp.ok && encoding === 'WEBM_OPUS') {
-          log('⚠️ WEBM failed, retrying OGG', 'warn');
-          resp = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${GOOGLE_KEY}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              config: { encoding: 'OGG_OPUS', languageCode: langCode, maxAlternatives: 5 },
-              audio: { content: base64 },
-            }),
-          });
-        }
-        if (!resp.ok) throw new Error('API error');
-        
-        const data = await resp.json();
-        const fetchTime = Date.now() - fetchStart;
-        const totalTime = Date.now() - captureStartTime;
-        const text = parseResult(data);
-        
-        const breakdown = `rec: ${recDur}ms · encode: ${encodeTime}ms · api: ${fetchTime}ms`;
-        log(`✅ "${text}" (${breakdown}, total: ${totalTime}ms)`);
-        renderResult(text, totalTime, breakdown);
-        
-      } catch(e) {
-        log(`❌ STT error: ${e.message}`, 'error');
-        renderError('Speech recognition failed');
       }
-    };
-    
-    mediaRecorder.start(CHUNK_MS);
-    log('▶️ Recording started');
-    
-    countdownTimer = setInterval(() => {
-      timeLeft--;
-      const el = $('timerDisplay');
-      if (el) el.textContent = timeLeft + 's';
-      if (timeLeft <= 0) clearInterval(countdownTimer);
-    }, 1000);
-    
-    autoStopTimer = setTimeout(() => {
-      if (isRecording) { log('⏰ Hard cap', 'warn'); stopRecording('timeout'); }
-    }, MAX_RECORD_MS);
-  }
+      if (!resp.ok) throw new Error('API ' + resp.status);
+      
+      const data = await resp.json();
+      const fetchMs = Date.now() - fetchT0;
+      const totalMs = Date.now() - captureT0;
+      const text = parseSTT(data);
+      
+      const bk = `rec: ${recMs}ms · encode: ${encMs}ms · api: ${fetchMs}ms`;
+      log(`✅ "${text}" (${bk}, total: ${totalMs}ms)`);
+      renderResult(text, totalMs, bk);
+    } catch(e) {
+      log('❌ ' + e.message, '#f87171');
+      renderError('Recognition failed');
+    }
+  };
   
-  function stopRecording(reason) {
-    if (!isRecording) return;
-    log(`⏹ Stop: ${reason}`);
-    isRecording = false;
-    clearTimeout(autoStopTimer);
-    clearInterval(countdownTimer);
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
-  }
+  // Start recording
+  recorder.start(1000);
+  log('▶️ Recording');
   
-  // ====================
-  // HELPERS
-  // ====================
-  function blobToBase64(blob) {
-    return new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onloadend = () => res(r.result.split(',')[1]);
-      r.onerror = () => rej(new Error('read-failed'));
-      r.readAsDataURL(blob);
-    });
-  }
+  // Countdown
+  cdTimer = setInterval(() => {
+    timeLeft--;
+    const el = $('timerEl');
+    if (el) el.textContent = timeLeft + 's';
+  }, 1000);
   
-  function parseResult(data) {
-    if (!data.results || !data.results.length) return '';
-    const alts = data.results[0].alternatives || [];
-    if (!alts.length) return '';
-    log(`📊 Conf: ${(alts[0].confidence*100).toFixed(0)}%, alts: ${alts.length}`);
-    alts.forEach((a,i) => log(`   [${i}] "${a.transcript}" (${(a.confidence*100).toFixed(0)}%)`));
-    return currentLang === 'ja' ? alts[0].transcript.replace(/\s+/g, '') : alts[0].transcript;
-  }
+  // Hard cap
+  stopTimer = setTimeout(() => {
+    if (recording) { log('⏰ Hard cap', '#fbbf24'); stop('timeout'); }
+  }, MAX_MS);
   
-  // ====================
-  // INIT
-  // ====================
-  renderIdle();
-</script>
+  // Volume monitor
+  monitorLoop();
+}
 
+function monitorLoop() {
+  const buf = new Uint8Array(analyser.frequencyBinCount);
+  
+  function tick() {
+    if (!recording) return;
+    
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) { const v = buf[i] - 128; sum += v * v; }
+    const rms = Math.sqrt(sum / buf.length);
+    
+    const now = Date.now();
+    const elapsed = now - captureT0;
+    
+    // Update meter
+    const meter = $('meter');
+    const badge = $('badge');
+    const rmsEl = $('rmsVal');
+    
+    if (meter) {
+      const pct = Math.min(100, rms * METER_SCALE);
+      meter.style.width = pct + '%';
+    }
+    if (rmsEl) rmsEl.textContent = rms.toFixed(1);
+    
+    if (!speechDetected) {
+      if (rms > SPEECH_THRESH) {
+        speechDetected = true;
+        speechT0 = now;
+        silenceT0 = 0;
+        log(`🗣 Speech at ${elapsed}ms (RMS: ${rms.toFixed(1)})`);
+        if (badge) { badge.textContent = 'SPEECH'; badge.className = 'badge badge-speech'; }
+        if (meter) meter.style.background = '#ffe600';
+      } else {
+        if (badge) badge.className = 'badge badge-wait';
+        if (meter) meter.style.background = 'rgba(255,255,255,0.15)';
+      }
+    } else {
+      if (rms < SILENCE_THRESH) {
+        if (!silenceT0) {
+          silenceT0 = now;
+          log(`🤫 Silence at ${elapsed}ms (RMS: ${rms.toFixed(1)})`);
+        }
+        const speechDur = (silenceT0 || now) - speechT0;
+        const silDur = now - silenceT0;
+        
+        if (badge) { badge.textContent = `SILENCE ${silDur}ms`; badge.className = 'badge badge-trail'; }
+        if (meter) meter.style.background = '#ff3366';
+        
+        if (silenceT0 && silDur >= SILENCE_MS && speechDur >= MIN_SPEECH_MS) {
+          log(`✂️ Auto-stop: ${silDur}ms silence, ${speechDur}ms speech`);
+          stop('silence');
+          return;
+        }
+      } else {
+        if (silenceT0) {
+          log(`🗣 Resumed after ${now - silenceT0}ms`);
+        }
+        silenceT0 = 0;
+        if (badge) { badge.textContent = 'SPEECH'; badge.className = 'badge badge-speech'; }
+        if (meter) meter.style.background = '#ffe600';
+      }
+    }
+    
+    rafId = requestAnimationFrame(tick);
+  }
+  
+  tick();
+}
+
+function stop(reason) {
+  if (!recording) return;
+  log(`⏹ Stop: ${reason}`);
+  recording = false;
+  clearTimeout(stopTimer);
+  clearInterval(cdTimer);
+  cancelAnimationFrame(rafId);
+  if (recorder?.state !== 'inactive') recorder.stop();
+}
+
+// ============================
+// HELPERS
+// ============================
+function blobToB64(blob) {
+  return new Promise((r, j) => {
+    const f = new FileReader();
+    f.onloadend = () => r(f.result.split(',')[1]);
+    f.onerror = () => j(new Error('read'));
+    f.readAsDataURL(blob);
+  });
+}
+
+function parseSTT(data) {
+  if (!data.results?.length) return '';
+  const alts = data.results[0].alternatives || [];
+  if (!alts.length) return '';
+  log(`📊 ${(alts[0].confidence*100).toFixed(0)}% conf, ${alts.length} alts`);
+  alts.forEach((a,i) => log(`  [${i}] "${a.transcript}" (${(a.confidence*100).toFixed(0)}%)`));
+  return lang === 'ja' ? alts[0].transcript.replace(/\s+/g,'') : alts[0].transcript;
+}
+
+// INIT
+renderIdle();
+</script>
 </body>
 </html>
