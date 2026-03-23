@@ -617,42 +617,90 @@ Return 1-3 options max. Return ONLY the JSON array.`
           const blob = new Blob(chunks, { type: mimeType });
           const recMs = Date.now() - captureT0;
           logMsg('🔴 Stopped. ' + blob.size + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks');
-          const apiT0 = Date.now();
+          
+          // Entire post-stop pipeline runs in Web Worker (off main thread)
+          const workerCode = `
+            self.onmessage = async function(e) {
+              const t0 = Date.now();
+              const { audioData, googleKey, lang, mimeType } = e.data;
+              try {
+                // b64 encode
+                const bytes = new Uint8Array(audioData);
+                const CHUNK = 8192;
+                let bin = '';
+                for (let i = 0; i < bytes.length; i += CHUNK) {
+                  bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+                }
+                const b64 = btoa(bin);
+                const b64Ms = Date.now() - t0;
+                
+                // Determine encoding
+                let enc = 'WEBM_OPUS';
+                if (mimeType.includes('mp4') || mimeType.includes('m4a')) enc = 'ENCODING_UNSPECIFIED';
+                else if (mimeType.includes('wav')) enc = 'LINEAR16';
+                else if (mimeType.includes('ogg')) enc = 'OGG_OPUS';
+                
+                // API call
+                const fetchT0 = Date.now();
+                let resp = await fetch('https://speech.googleapis.com/v1/speech:recognize?key=' + googleKey, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ config: { encoding: enc, languageCode: lang, maxAlternatives: 5, model: 'default' }, audio: { content: b64 } }),
+                });
+                if (!resp.ok && enc === 'WEBM_OPUS') {
+                  resp = await fetch('https://speech.googleapis.com/v1/speech:recognize?key=' + googleKey, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ config: { encoding: 'OGG_OPUS', languageCode: lang, maxAlternatives: 5 }, audio: { content: b64 } }),
+                  });
+                }
+                if (!resp.ok) { self.postMessage({ error: 'stt-api-error' }); return; }
+                const data = await resp.json();
+                const fetchMs = Date.now() - fetchT0;
+                const totalMs = Date.now() - t0;
+                
+                // Parse result
+                let transcript = '', alternatives = [], confidence = 0;
+                if (data.results && data.results.length > 0) {
+                  const alts = (data.results[0].alternatives || []).map(function(a) { return { transcript: a.transcript || '', confidence: a.confidence || 0 }; });
+                  transcript = alts[0] ? alts[0].transcript : '';
+                  alternatives = alts.slice(0, 3);
+                  confidence = alts[0] ? alts[0].confidence : 0;
+                }
+                
+                self.postMessage({ ok: true, transcript, alternatives, confidence, b64Ms, fetchMs, totalMs });
+              } catch(err) {
+                self.postMessage({ error: 'stt-network-error' });
+              }
+            };
+          `;
+          
+          const pipelineT0 = Date.now();
           try {
-            // Web Worker b64 encoding — runs off main thread, immune to React congestion
             const ab = await blob.arrayBuffer();
-            const workerCode = `self.onmessage=function(e){var b=new Uint8Array(e.data),c=8192,s='';for(var i=0;i<b.length;i+=c)s+=String.fromCharCode.apply(null,b.subarray(i,i+c));self.postMessage(btoa(s));}`;
-            const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-            const workerUrl = URL.createObjectURL(workerBlob);
-            const worker = new Worker(workerUrl);
-            const b64 = await new Promise((res, rej) => {
-              worker.onmessage = (e) => { res(e.data); worker.terminate(); URL.revokeObjectURL(workerUrl); };
-              worker.onerror = () => { rej(new Error('worker-b64')); worker.terminate(); URL.revokeObjectURL(workerUrl); };
-              worker.postMessage(ab, [ab]);
+            const wBlob = new Blob([workerCode], { type: 'application/javascript' });
+            const wUrl = URL.createObjectURL(wBlob);
+            const worker = new Worker(wUrl);
+            
+            const result = await new Promise((res, rej) => {
+              worker.onmessage = (e) => { res(e.data); worker.terminate(); URL.revokeObjectURL(wUrl); };
+              worker.onerror = (err) => { rej(new Error('worker-error')); worker.terminate(); URL.revokeObjectURL(wUrl); };
+              worker.postMessage({ audioData: ab, googleKey, lang, mimeType }, [ab]);
             });
-            logMsg('⏱ b64: ' + (Date.now() - apiT0) + 'ms (worker)');
-            let enc = 'WEBM_OPUS';
-            if (mimeType.includes('mp4') || mimeType.includes('m4a')) enc = 'ENCODING_UNSPECIFIED';
-            else if (mimeType.includes('wav')) enc = 'LINEAR16';
-            else if (mimeType.includes('ogg')) enc = 'OGG_OPUS';
-            const fetchT0 = Date.now();
-            logMsg('⏱ API call at ' + (fetchT0 - captureT0) + 'ms');
-            let resp = await fetch('https://speech.googleapis.com/v1/speech:recognize?key=' + googleKey, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ config: { encoding: enc, languageCode: lang, maxAlternatives: 5, model: 'default' }, audio: { content: b64 } }),
-            });
-            if (!resp.ok && enc === 'WEBM_OPUS') {
-              logMsg('⚠️ Retry OGG');
-              resp = await fetch('https://speech.googleapis.com/v1/speech:recognize?key=' + googleKey, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ config: { encoding: 'OGG_OPUS', languageCode: lang, maxAlternatives: 5 }, audio: { content: b64 } }),
-              });
+            
+            const pipelineMs = Date.now() - pipelineT0;
+            
+            if (result.error) {
+              logMsg('❌ Worker: ' + result.error + ' (' + pipelineMs + 'ms)');
+              return reject(new Error(result.error));
             }
-            if (!resp.ok) return reject(new Error('stt-api-error'));
-            const data = await resp.json();
-            logMsg('⏱ API: ' + (Date.now() - fetchT0) + 'ms, total: ' + (Date.now() - captureT0) + 'ms');
-            resolve(parseSTTResults(data));
-          } catch (e) { reject(new Error('stt-network-error')); }
+            
+            logMsg('⏱ Worker pipeline: b64=' + result.b64Ms + 'ms, api=' + result.fetchMs + 'ms, worker total=' + result.totalMs + 'ms, main thread=' + pipelineMs + 'ms');
+            resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence });
+          } catch(e) {
+            logMsg('❌ Pipeline error: ' + e.message);
+            reject(new Error('stt-network-error'));
+          }
         };
         recorder.start(1000);
         recording = true;
@@ -777,7 +825,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.51.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.52.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -3542,7 +3590,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.51.0 loaded');
+      console.log('[Kanji Hunt] v2.52.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
