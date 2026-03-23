@@ -236,11 +236,28 @@
     
     // Set up Web Audio analyser for volume monitoring
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    // iOS Safari requires explicit resume after user gesture
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+      log(`🔈 AudioContext resumed (was suspended)`);
+    }
     const source = audioContext.createMediaStreamSource(stream);
     analyser = audioContext.createAnalyser();
     analyser.fftSize = 512;
     analyser.smoothingTimeConstant = 0.3;
     source.connect(analyser);
+    
+    // Verify analyser is receiving data after a brief delay
+    setTimeout(() => {
+      if (!analyser || !isRecording) return;
+      const testData = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteTimeDomainData(testData);
+      const testRms = Math.sqrt(testData.reduce((s, v) => s + (v-128)*(v-128), 0) / testData.length);
+      log(`🔍 Analyser check: RMS=${testRms.toFixed(1)}, state=${audioContext.state}, sampleRate=${audioContext.sampleRate}`);
+      if (testRms === 0) {
+        log('⚠️ Analyser returning zero — silence detection may not work on this device', 'warn');
+      }
+    }, 300);
     
     // Set up MediaRecorder
     let mimeType = 'audio/webm';
