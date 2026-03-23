@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Silence Detection Test</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; display: flex; flex-direction: column; }
+  
+  .tabs { display: flex; background: rgba(255,255,255,0.97); position: fixed; bottom: 0; left: 0; right: 0; height: 56px; z-index: 100; }
+  .tab { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #5f6368; border: none; background: none; cursor: pointer; position: relative; }
+  .tab.active { color: #1a1a2e; }
+  .tab.active::after { content: ''; position: absolute; bottom: 0; left: 25%; right: 25%; height: 3px; background: #ffe600; border-radius: 2px; }
+
+  .page { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; padding-bottom: 80px; min-height: 100vh; }
+  .placeholder { color: rgba(255,255,255,0.2); font-size: 16px; }
+  
+  .lang-toggle { display: flex; background: rgba(255,255,255,0.08); border-radius: 50px; padding: 3px; margin-bottom: 32px; }
+  .lang-btn { padding: 6px 14px; border-radius: 50px; border: none; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .lang-ja { background: #ffe600; color: #000; }
+  .lang-en { background: #60a5fa; color: #fff; }
+  .lang-off { background: transparent; color: rgba(255,255,255,0.4); }
+  
+  .mic-ring { width: 120px; height: 120px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; }
+  .mic-circle { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: opacity 0.2s; }
+  .mic-icon { width: 24px; height: 24px; border-radius: 4px; background: #fff; }
+  
+  .status-text { margin-top: 28px; font-size: 18px; font-weight: 600; transition: opacity 0.3s; }
+  .hint-text { margin-top: 8px; font-size: 14px; color: rgba(255,255,255,0.4); }
+  .timer { margin-top: 16px; font-size: 13px; color: rgba(255,255,255,0.2); }
+  .result { margin-top: 24px; font-size: 28px; font-weight: 700; color: #ffe600; }
+  
+  .retry-btn { margin-top: 24px; background: transparent; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 8px 20px; color: rgba(255,255,255,0.35); font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  
+  /* Volume meter */
+  .meter-wrap { margin-top: 20px; width: 200px; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; }
+  .meter-bar { height: 100%; background: #4ade80; border-radius: 3px; transition: width 0.05s; width: 0%; }
+  .meter-bar.speech { background: #ffe600; }
+  .meter-bar.silence { background: rgba(255,255,255,0.15); }
+  
+  /* Debug log */
+  .debug { position: fixed; top: 0; left: 0; right: 0; max-height: 35vh; overflow-y: auto; background: rgba(0,0,0,0.9); padding: 8px; font-size: 10px; font-family: monospace; z-index: 200; display: none; }
+  .debug.show { display: block; }
+  .debug-toggle { position: fixed; top: 8px; right: 8px; z-index: 201; background: rgba(0,0,0,0.5); border: none; border-radius: 6px; padding: 4px 8px; font-size: 10px; color: rgba(255,255,255,0.5); cursor: pointer; }
+  
+  .phase-label { margin-top: 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; padding: 3px 10px; border-radius: 4px; }
+  .phase-waiting { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.3); }
+  .phase-speech { background: rgba(255,230,0,0.15); color: #ffe600; }
+  .phase-trailing { background: rgba(255,51,102,0.15); color: #ff3366; }
+  
+  @keyframes pulse-ring-red { 0%,100% { box-shadow: 0 0 0 0 rgba(255,51,102,0.3); } 50% { box-shadow: 0 0 0 20px rgba(255,51,102,0); } }
+  @keyframes pulse-ring-blue { 0%,100% { box-shadow: 0 0 0 0 rgba(96,165,250,0.3); } 50% { box-shadow: 0 0 0 20px rgba(96,165,250,0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<button class="debug-toggle" onclick="document.getElementById('debug').classList.toggle('show')">📋 Log</button>
+<div id="debug" class="debug"></div>
+
+<div id="capturePage" class="page">
+  <!-- Filled by JS -->
+</div>
+
+<div id="practicePage" class="page" style="display:none;">
+  <p class="placeholder">Practice (placeholder)</p>
+</div>
+
+<div class="tabs">
+  <button class="tab active" id="tabCapture" onclick="switchTab('capture')">Capture</button>
+  <button class="tab" id="tabPractice" onclick="switchTab('practice')">Practice</button>
+</div>
+
+<script>
+  // ====================
+  // CONFIG
+  // ====================
+  const SILENCE_THRESHOLD = 15;      // RMS below this = silence (0-128 scale)
+  const SPEECH_THRESHOLD = 20;       // RMS above this = speech detected
+  const SILENCE_DURATION_MS = 800;   // ms of silence after speech to auto-stop
+  const MAX_RECORD_MS = 5500;        // hard cap
+  const MIN_SPEECH_MS = 300;         // minimum speech duration before allowing silence stop
+  const GOOGLE_STT_KEY_STORAGE = 'wordHunter_googleTTSKey';
+  
+  let currentLang = 'ja';
+  let currentTab = 'capture';
+  let isRecording = false;
+  let mediaRecorder = null;
+  let audioContext = null;
+  let analyser = null;
+  let animFrameId = null;
+  let silenceStart = 0;
+  let speechDetected = false;
+  let speechStart = 0;
+  let chunks = [];
+  let autoStopTimer = null;
+  let countdownTimer = null;
+  let timeLeft = 6;
+  
+  const log = (msg, level = 'info') => {
+    const el = document.getElementById('debug');
+    const t = new Date();
+    const ts = `${t.getMinutes()}:${String(t.getSeconds()).padStart(2,'0')}.${String(t.getMilliseconds()).padStart(3,'0')}`;
+    const color = level === 'error' ? '#f87171' : level === 'warn' ? '#fbbf24' : '#4ade80';
+    el.innerHTML += `<div style="color:${color}">${ts} ${msg}</div>`;
+    el.scrollTop = el.scrollHeight;
+    console.log(`[SilenceTest] ${msg}`);
+  };
+  
+  const getGoogleKey = () => localStorage.getItem(GOOGLE_STT_KEY_STORAGE) || '';
+  
+  // ====================
+  // TAB SWITCHING
+  // ====================
+  function switchTab(tab) {
+    currentTab = tab;
+    document.getElementById('capturePage').style.display = tab === 'capture' ? 'flex' : 'none';
+    document.getElementById('practicePage').style.display = tab === 'practice' ? 'flex' : 'none';
+    document.getElementById('tabCapture').classList.toggle('active', tab === 'capture');
+    document.getElementById('tabPractice').classList.toggle('active', tab === 'practice');
+    if (tab === 'capture') renderIdle();
+    if (tab !== 'capture' && isRecording) stopRecording('tab-switch');
+  }
+  
+  // ====================
+  // RENDER STATES
+  // ====================
+  function renderIdle() {
+    const isJa = currentLang === 'ja';
+    document.getElementById('capturePage').innerHTML = `
+      <div class="lang-toggle">
+        <button class="lang-btn ${isJa ? 'lang-ja' : 'lang-off'}" onclick="setLang('ja')">🇯🇵 JA</button>
+        <button class="lang-btn ${!isJa ? 'lang-en' : 'lang-off'}" onclick="setLang('en')">🇺🇸 EN</button>
+      </div>
+      <div class="mic-ring" onclick="startCapture()" style="background: ${isJa ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)'}">
+        <div class="mic-circle" style="background: ${isJa ? '#ff3366' : '#3b82f6'}">
+          <div class="mic-icon"></div>
+        </div>
+      </div>
+      <div class="status-text" style="color: rgba(255,255,255,0.4);">Tap to record</div>
+    `;
+  }
+  
+  function renderRecording() {
+    const isJa = currentLang === 'ja';
+    const ringColor = isJa ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)';
+    const circleColor = isJa ? '#ff3366' : '#3b82f6';
+    const pulseAnim = isJa ? 'pulse-ring-red' : 'pulse-ring-blue';
+    document.getElementById('capturePage').innerHTML = `
+      <div class="lang-toggle">
+        <button class="lang-btn ${isJa ? 'lang-ja' : 'lang-off'}" disabled>🇯🇵 JA</button>
+        <button class="lang-btn ${!isJa ? 'lang-en' : 'lang-off'}" disabled>🇺🇸 EN</button>
+      </div>
+      <div class="mic-ring" onclick="stopRecording('tap')" style="background: ${ringColor}; animation: ${pulseAnim} 1.5s ease infinite; cursor: pointer;">
+        <div class="mic-circle" style="background: ${circleColor}">
+          <div class="mic-icon"></div>
+        </div>
+      </div>
+      <div class="status-text">Recording ${isJa ? 'Japanese' : 'English'}...</div>
+      <div class="hint-text">Tap circle when done</div>
+      <div id="phaseLabel" class="phase-label phase-waiting">WAITING FOR SPEECH</div>
+      <div class="meter-wrap"><div id="meter" class="meter-bar"></div></div>
+      <div class="timer" id="timerDisplay">${timeLeft}s</div>
+    `;
+  }
+  
+  function renderProcessing() {
+    document.getElementById('capturePage').innerHTML = `
+      <div style="width:44px;height:44px;border:3px solid rgba(255,255,255,0.1);border-top-color:rgba(255,255,255,0.7);border-radius:50%;animation:spin 1s linear infinite;"></div>
+      <div class="status-text" style="color:rgba(255,255,255,0.35);font-size:13px;margin-top:16px;">Processing...</div>
+    `;
+  }
+  
+  function renderResult(text, elapsed) {
+    const isJa = currentLang === 'ja';
+    document.getElementById('capturePage').innerHTML = `
+      <div class="lang-toggle">
+        <button class="lang-btn ${isJa ? 'lang-ja' : 'lang-off'}" onclick="setLang('ja')">🇯🇵 JA</button>
+        <button class="lang-btn ${!isJa ? 'lang-en' : 'lang-off'}" onclick="setLang('en')">🇺🇸 EN</button>
+      </div>
+      <div class="result">${text || '(no speech detected)'}</div>
+      <div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.25);">${elapsed}ms total</div>
+      <button class="retry-btn" onclick="startCapture()">
+        <span style="display:inline-block;transform:scaleX(-1)">↻</span> Try again
+      </button>
+    `;
+  }
+  
+  function renderError(msg) {
+    document.getElementById('capturePage').innerHTML = `
+      <div style="width:64px;height:64px;border-radius:50%;background:rgba(252,165,165,0.1);display:flex;align-items:center;justify-content:center;margin-bottom:20px;">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fca5a5" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+      </div>
+      <div style="font-size:15px;font-weight:600;color:#fca5a5;text-align:center;max-width:260px;">${msg}</div>
+      <button class="retry-btn" onclick="startCapture()">
+        <span style="display:inline-block;transform:scaleX(-1)">↻</span> Try again
+      </button>
+    `;
+  }
+  
+  function setLang(lang) {
+    currentLang = lang;
+    if (!isRecording) renderIdle();
+  }
+  
+  // ====================
+  // CAPTURE WITH SILENCE DETECTION
+  // ====================
+  async function startCapture() {
+    const gKey = getGoogleKey();
+    if (!gKey) {
+      renderError('No Google API key. Add it in Kanji Hunt Settings first.');
+      return;
+    }
+    
+    isRecording = true;
+    speechDetected = false;
+    silenceStart = 0;
+    speechStart = 0;
+    chunks = [];
+    timeLeft = 6;
+    
+    renderRecording();
+    log(`🎙 Starting capture (${currentLang})`);
+    
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch(e) {
+      log(`❌ Mic denied: ${e.message}`, 'error');
+      isRecording = false;
+      renderError('Microphone not available');
+      return;
+    }
+    
+    // Set up Web Audio analyser for volume monitoring
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(stream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.3;
+    source.connect(analyser);
+    
+    // Set up MediaRecorder
+    let mimeType = 'audio/webm';
+    for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/wav']) {
+      if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
+    }
+    log(`📦 Format: ${mimeType}`);
+    
+    mediaRecorder = new MediaRecorder(stream, { mimeType });
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    
+    const captureStart = Date.now();
+    
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      cancelAnimationFrame(animFrameId);
+      if (audioContext) { audioContext.close(); audioContext = null; }
+      clearTimeout(autoStopTimer);
+      clearInterval(countdownTimer);
+      isRecording = false;
+      
+      if (chunks.length === 0) {
+        log('❌ No audio chunks', 'error');
+        renderError('No audio captured');
+        return;
+      }
+      
+      const blob = new Blob(chunks, { type: mimeType });
+      const recordDuration = Date.now() - captureStart;
+      log(`🔴 Stopped. ${blob.size} bytes, ${recordDuration}ms recording`);
+      
+      renderProcessing();
+      
+      // Send to Google STT
+      const apiStart = Date.now();
+      try {
+        const base64 = await blobToBase64(blob);
+        let encoding = 'WEBM_OPUS';
+        if (mimeType.includes('mp4') || mimeType.includes('m4a')) encoding = 'ENCODING_UNSPECIFIED';
+        else if (mimeType.includes('wav')) encoding = 'LINEAR16';
+        
+        const langCode = currentLang === 'ja' ? 'ja-JP' : 'en-US';
+        const resp = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${gKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            config: { encoding, languageCode: langCode, maxAlternatives: 5, model: 'default' },
+            audio: { content: base64 },
+          }),
+        });
+        
+        if (!resp.ok) {
+          // Retry with different encoding if WEBM fails
+          if (encoding === 'WEBM_OPUS') {
+            log('⚠️ WEBM failed, retrying OGG_OPUS', 'warn');
+            const retry = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${gKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                config: { encoding: 'OGG_OPUS', languageCode: langCode, maxAlternatives: 5 },
+                audio: { content: base64 },
+              }),
+            });
+            if (!retry.ok) throw new Error('API error');
+            const data = await retry.json();
+            const apiElapsed = Date.now() - apiStart;
+            const totalElapsed = Date.now() - captureStart;
+            const text = parseResult(data);
+            log(`✅ Result: "${text}" (API: ${apiElapsed}ms, total: ${totalElapsed}ms)`);
+            renderResult(text, totalElapsed);
+            return;
+          }
+          throw new Error('API error');
+        }
+        
+        const data = await resp.json();
+        const apiElapsed = Date.now() - apiStart;
+        const totalElapsed = Date.now() - captureStart;
+        const text = parseResult(data);
+        log(`✅ Result: "${text}" (API: ${apiElapsed}ms, total: ${totalElapsed}ms)`);
+        renderResult(text, totalElapsed);
+        
+      } catch(e) {
+        log(`❌ STT error: ${e.message}`, 'error');
+        renderError('Speech recognition failed');
+      }
+    };
+    
+    // Start recording
+    mediaRecorder.start(500);
+    log('▶️ Recording started');
+    
+    // Countdown timer
+    countdownTimer = setInterval(() => {
+      timeLeft--;
+      const el = document.getElementById('timerDisplay');
+      if (el) el.textContent = timeLeft + 's';
+      if (timeLeft <= 0) clearInterval(countdownTimer);
+    }, 1000);
+    
+    // Hard cap auto-stop
+    autoStopTimer = setTimeout(() => {
+      if (isRecording) {
+        log('⏰ Hard cap reached', 'warn');
+        stopRecording('timeout');
+      }
+    }, MAX_RECORD_MS);
+    
+    // Start volume monitoring
+    monitorVolume(captureStart);
+  }
+  
+  function monitorVolume(captureStart) {
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    
+    function tick() {
+      if (!isRecording) return;
+      
+      analyser.getByteTimeDomainData(dataArray);
+      
+      // Calculate RMS
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const v = dataArray[i] - 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+      
+      // Update meter
+      const meter = document.getElementById('meter');
+      const phase = document.getElementById('phaseLabel');
+      if (meter) {
+        const pct = Math.min(100, (rms / 60) * 100);
+        meter.style.width = pct + '%';
+      }
+      
+      const now = Date.now();
+      const elapsed = now - captureStart;
+      
+      if (!speechDetected) {
+        // Waiting for speech
+        if (rms > SPEECH_THRESHOLD) {
+          speechDetected = true;
+          speechStart = now;
+          silenceStart = 0;
+          log(`🗣 Speech detected at ${elapsed}ms (RMS: ${rms.toFixed(1)})`);
+          if (meter) { meter.className = 'meter-bar speech'; }
+          if (phase) { phase.textContent = 'SPEECH DETECTED'; phase.className = 'phase-label phase-speech'; }
+        }
+      } else {
+        // Speech already detected — watch for silence
+        if (rms < SILENCE_THRESHOLD) {
+          if (!silenceStart) {
+            silenceStart = now;
+            log(`🤫 Silence started at ${elapsed}ms`);
+            if (phase) { phase.textContent = 'TRAILING SILENCE...'; phase.className = 'phase-label phase-trailing'; }
+          }
+          
+          const speechDuration = (silenceStart || now) - speechStart;
+          const silenceDuration = now - silenceStart;
+          
+          if (silenceStart && silenceDuration >= SILENCE_DURATION_MS && speechDuration >= MIN_SPEECH_MS) {
+            log(`✂️ Auto-stop: ${silenceDuration}ms silence after ${speechDuration}ms speech`);
+            stopRecording('silence');
+            return;
+          }
+          if (meter) { meter.className = 'meter-bar silence'; }
+        } else {
+          // Speech resumed
+          if (silenceStart) {
+            const gap = now - silenceStart;
+            log(`🗣 Speech resumed after ${gap}ms gap`);
+            if (phase) { phase.textContent = 'SPEECH DETECTED'; phase.className = 'phase-label phase-speech'; }
+          }
+          silenceStart = 0;
+          if (meter) { meter.className = 'meter-bar speech'; }
+        }
+      }
+      
+      animFrameId = requestAnimationFrame(tick);
+    }
+    
+    tick();
+  }
+  
+  function stopRecording(reason) {
+    if (!isRecording) return;
+    log(`⏹ Stop reason: ${reason}`);
+    isRecording = false;
+    clearTimeout(autoStopTimer);
+    clearInterval(countdownTimer);
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+  }
+  
+  // ====================
+  // HELPERS
+  // ====================
+  function blobToBase64(blob) {
+    return new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onloadend = () => res(reader.result.split(',')[1]);
+      reader.onerror = () => rej(new Error('read-failed'));
+      reader.readAsDataURL(blob);
+    });
+  }
+  
+  function parseResult(data) {
+    if (!data.results || data.results.length === 0) return '';
+    const alts = data.results[0].alternatives || [];
+    if (alts.length === 0) return '';
+    const text = alts[0].transcript || '';
+    log(`📊 Confidence: ${(alts[0].confidence * 100).toFixed(0)}%, alts: ${alts.length}`);
+    alts.forEach((a, i) => log(`   [${i}] "${a.transcript}" (${(a.confidence * 100).toFixed(0)}%)`));
+    return currentLang === 'ja' ? text.replace(/\s+/g, '') : text;
+  }
+  
+  // ====================
+  // INIT
+  // ====================
+  renderIdle();
+</script>
+
+</body>
+</html>
