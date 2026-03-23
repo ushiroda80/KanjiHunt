@@ -619,15 +619,18 @@ Return 1-3 options max. Return ONLY the JSON array.`
           logMsg('🔴 Stopped. ' + blob.size + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks');
           const apiT0 = Date.now();
           try {
+            // Web Worker b64 encoding — runs off main thread, immune to React congestion
             const ab = await blob.arrayBuffer();
-            const bytes = new Uint8Array(ab);
-            const CHUNK = 8192;
-            let bin = '';
-            for (let i = 0; i < bytes.length; i += CHUNK) {
-              bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
-            }
-            const b64 = btoa(bin);
-            logMsg('⏱ b64: ' + (Date.now() - apiT0) + 'ms');
+            const workerCode = `self.onmessage=function(e){var b=new Uint8Array(e.data),c=8192,s='';for(var i=0;i<b.length;i+=c)s+=String.fromCharCode.apply(null,b.subarray(i,i+c));self.postMessage(btoa(s));}`;
+            const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+            const workerUrl = URL.createObjectURL(workerBlob);
+            const worker = new Worker(workerUrl);
+            const b64 = await new Promise((res, rej) => {
+              worker.onmessage = (e) => { res(e.data); worker.terminate(); URL.revokeObjectURL(workerUrl); };
+              worker.onerror = () => { rej(new Error('worker-b64')); worker.terminate(); URL.revokeObjectURL(workerUrl); };
+              worker.postMessage(ab, [ab]);
+            });
+            logMsg('⏱ b64: ' + (Date.now() - apiT0) + 'ms (worker)');
             let enc = 'WEBM_OPUS';
             if (mimeType.includes('mp4') || mimeType.includes('m4a')) enc = 'ENCODING_UNSPECIFIED';
             else if (mimeType.includes('wav')) enc = 'LINEAR16';
@@ -774,7 +777,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.50.2 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.51.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -3539,7 +3542,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.50.2 loaded');
+      console.log('[Kanji Hunt] v2.51.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
