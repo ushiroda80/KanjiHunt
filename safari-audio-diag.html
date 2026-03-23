@@ -3,683 +3,404 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Safari Audio Diagnostics</title>
+<title>Safari Audio Diag v2</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0a0a14; color: #e0e0e0; padding: 16px; padding-bottom: 40px; }
-  h1 { font-size: 16px; font-weight: 700; color: #ffe600; margin-bottom: 4px; }
-  .sub { font-size: 11px; color: #666; margin-bottom: 16px; }
+  body { font-family: -apple-system, sans-serif; background: #0a0a14; color: #e0e0e0; padding: 16px 12px 40px; }
+  h1 { font-size: 15px; font-weight: 700; color: #ffe600; }
+  .sub { font-size: 10px; color: #555; margin-bottom: 12px; }
+  .progress { font-size: 12px; color: #ffe600; margin-bottom: 12px; min-height: 20px; }
   
-  .test-group { margin-bottom: 20px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 14px; }
-  .test-group h2 { font-size: 13px; font-weight: 700; color: #aaa; margin-bottom: 8px; letter-spacing: 0.3px; }
-  .test-group p { font-size: 10px; color: #555; margin-bottom: 10px; line-height: 1.4; }
+  .run-btn { background: #ffe600; color: #000; border: none; border-radius: 8px; padding: 12px 24px; font-size: 14px; font-weight: 700; cursor: pointer; width: 100%; margin-bottom: 12px; }
+  .run-btn:disabled { background: #333; color: #666; }
   
-  .test-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
-  .test-row:last-child { border-bottom: none; }
-  .test-name { font-size: 11px; color: #888; flex: 1; }
-  .test-val { font-size: 11px; font-family: monospace; color: #4ade80; text-align: right; max-width: 200px; word-break: break-all; }
-  .test-val.fail { color: #f87171; }
-  .test-val.warn { color: #fbbf24; }
-  .test-val.wait { color: #555; }
+  .section { margin-bottom: 14px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 12px; }
+  .section h2 { font-size: 11px; font-weight: 700; color: #888; margin-bottom: 6px; }
+  .row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.02); }
+  .row:last-child { border: none; }
+  .k { font-size: 10px; color: #666; }
+  .v { font-size: 10px; font-family: monospace; text-align: right; max-width: 55%; word-break: break-all; }
+  .v.ok { color: #4ade80; }
+  .v.fail { color: #f87171; }
+  .v.warn { color: #fbbf24; }
+  .v.wait { color: #555; }
   
-  .run-btn { background: #ffe600; color: #000; border: none; border-radius: 8px; padding: 10px 24px; font-size: 14px; font-weight: 700; cursor: pointer; display: block; width: 100%; margin-bottom: 16px; }
-  .run-btn:disabled { background: #333; color: #666; cursor: default; }
-  .run-btn.small { padding: 6px 14px; font-size: 11px; width: auto; display: inline-block; margin: 4px 4px 4px 0; }
-  
-  .log-area { background: #000; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px; font-size: 10px; font-family: monospace; max-height: 200px; overflow-y: auto; margin-top: 8px; line-height: 1.5; }
-  
-  .meter { width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; margin: 4px 0; }
-  .meter-fill { height: 100%; background: #4ade80; border-radius: 3px; width: 0%; transition: width 0.1s; }
-  
-  .copy-btn { background: rgba(255,255,255,0.06); color: #888; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 10px 24px; font-size: 12px; font-weight: 600; cursor: pointer; display: block; width: 100%; margin-top: 12px; }
-  
-  .version { font-size: 9px; color: #333; text-align: center; margin-top: 16px; }
+  .copy-btn { background: rgba(255,255,255,0.06); color: #888; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 10px; font-size: 12px; font-weight: 600; cursor: pointer; width: 100%; margin-top: 8px; }
+  .ver { font-size: 9px; color: #333; text-align: center; margin-top: 12px; }
 </style>
 </head>
 <body>
 
 <h1>Safari Audio Diagnostics</h1>
-<p class="sub">Run all tests, then copy results. Requires mic permission.</p>
+<p class="sub">Tap Run. Speak into mic during tests (~15s). Then Copy results.</p>
+<div class="progress" id="progress"></div>
+<button class="run-btn" id="runBtn" onclick="run()">▶ Run All Tests</button>
 
-<button class="run-btn" id="runAll" onclick="runAll()">▶ Run All Tests</button>
+<div id="results"></div>
 
-<!-- 1. ENVIRONMENT -->
-<div class="test-group" id="env">
-  <h2>1. Environment</h2>
-  <p>Browser, OS, audio API availability</p>
-  <div id="envResults"></div>
-</div>
-
-<!-- 2. MEDIARECORDER -->
-<div class="test-group">
-  <h2>2. MediaRecorder</h2>
-  <p>Supported formats, chunk behavior, timeslice reliability</p>
-  <div id="mrResults"></div>
-</div>
-
-<!-- 3. WEB AUDIO API -->
-<div class="test-group">
-  <h2>3. Web Audio API — AnalyserNode</h2>
-  <p>Does AnalyserNode receive real data from mic stream?</p>
-  <div id="waResults"></div>
-  <div class="meter"><div id="waMeter" class="meter-fill"></div></div>
-  <div id="waLog" class="log-area" style="display:none"></div>
-</div>
-
-<!-- 4. CHUNK DECODE -->
-<div class="test-group">
-  <h2>4. Chunk Decode</h2>
-  <p>Can we decode individual MediaRecorder chunks mid-stream?</p>
-  <div id="cdResults"></div>
-  <div id="cdLog" class="log-area" style="display:none"></div>
-</div>
-
-<!-- 5. SCRIPTPROCESSOR FALLBACK -->
-<div class="test-group">
-  <h2>5. ScriptProcessorNode (legacy)</h2>
-  <p>Older API — does it receive real audio samples from mic?</p>
-  <div id="spResults"></div>
-  <div class="meter"><div id="spMeter" class="meter-fill"></div></div>
-  <div id="spLog" class="log-area" style="display:none"></div>
-</div>
-
-<!-- 6. AUDIOWORKLET -->
-<div class="test-group">
-  <h2>6. AudioWorklet</h2>
-  <p>Modern replacement for ScriptProcessor — available? Gets data?</p>
-  <div id="awResults"></div>
-  <div class="meter"><div id="awMeter" class="meter-fill"></div></div>
-  <div id="awLog" class="log-area" style="display:none"></div>
-</div>
-
-<!-- 7. TIMING -->
-<div class="test-group">
-  <h2>7. Timing &amp; Latency</h2>
-  <p>getUserMedia latency, AudioContext creation, chunk delivery timing</p>
-  <div id="tmResults"></div>
-</div>
-
-<!-- 8. FULL CAPTURE TEST -->
-<div class="test-group">
-  <h2>8. Full Capture (3s)</h2>
-  <p>Records 3s with all monitoring active. Shows which methods got real data.</p>
-  <button class="run-btn small" id="runCapture" onclick="runFullCapture()" disabled>▶ Run capture test</button>
-  <div id="fcResults"></div>
-  <div id="fcLog" class="log-area" style="display:none"></div>
-</div>
-
-<button class="copy-btn" onclick="copyResults()">📋 Copy All Results</button>
-<div class="version">safari-audio-diag v1.0</div>
+<button class="copy-btn" onclick="copyAll()">📋 Copy All Results</button>
+<div class="ver">safari-audio-diag v2.0</div>
 
 <script>
-const R = {}; // all results stored here
-let globalStream = null;
+const ALL = {};
+let stream = null;
 
-function setResult(section, key, value, status = 'ok') {
-  if (!R[section]) R[section] = {};
-  R[section][key] = { value, status };
-  renderSection(section);
+function set(sec, key, val, st='ok') {
+  if (!ALL[sec]) ALL[sec] = {};
+  ALL[sec][key] = { v: val, s: st };
+  render();
 }
 
-function renderSection(section) {
-  const container = document.getElementById(section + 'Results');
-  if (!container) return;
-  let html = '';
-  const data = R[section] || {};
-  for (const [k, v] of Object.entries(data)) {
-    const cls = v.status === 'fail' ? 'fail' : v.status === 'warn' ? 'warn' : v.status === 'wait' ? 'wait' : '';
-    html += `<div class="test-row"><span class="test-name">${k}</span><span class="test-val ${cls}">${v.value}</span></div>`;
+function render() {
+  let h = '';
+  for (const [sec, data] of Object.entries(ALL)) {
+    h += `<div class="section"><h2>${sec}</h2>`;
+    for (const [k, d] of Object.entries(data)) {
+      h += `<div class="row"><span class="k">${k}</span><span class="v ${d.s}">${d.v}</span></div>`;
+    }
+    h += '</div>';
   }
-  container.innerHTML = html;
+  document.getElementById('results').innerHTML = h;
 }
 
-function appendLog(id, msg, color = '#4ade80') {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.style.display = 'block';
-  const t = new Date();
-  const ts = `${t.getSeconds()}.${String(t.getMilliseconds()).padStart(3,'0')}`;
-  el.innerHTML += `<div style="color:${color}">${ts} ${msg}</div>`;
-  el.scrollTop = el.scrollHeight;
+function prog(msg) { document.getElementById('progress').textContent = msg; }
+
+// Timeout wrapper - prevents any test from hanging
+function withTimeout(fn, ms = 5000) {
+  return Promise.race([
+    fn(),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('TIMEOUT')), ms))
+  ]);
 }
 
-// ========== 1. ENVIRONMENT ==========
-function testEnvironment() {
+// ===== 1. ENV =====
+function test1() {
   const ua = navigator.userAgent;
-  setResult('env', 'User Agent', ua.length > 80 ? ua.substring(0, 80) + '...' : ua);
-  setResult('env', 'Platform', navigator.platform || 'unknown');
-  setResult('env', 'Safari', /Safari/.test(ua) && !/Chrome/.test(ua) ? 'YES' : 'no');
-  setResult('env', 'iOS', /iPad|iPhone|iPod/.test(ua) ? 'YES' : 'no');
-  setResult('env', 'getUserMedia', !!navigator.mediaDevices?.getUserMedia ? '✓' : '✗', !!navigator.mediaDevices?.getUserMedia ? 'ok' : 'fail');
-  setResult('env', 'MediaRecorder', typeof MediaRecorder !== 'undefined' ? '✓' : '✗', typeof MediaRecorder !== 'undefined' ? 'ok' : 'fail');
-  setResult('env', 'AudioContext', !!(window.AudioContext || window.webkitAudioContext) ? '✓' : '✗');
-  setResult('env', 'AudioWorklet', !!(window.AudioContext?.prototype?.audioWorklet || window.webkitAudioContext?.prototype?.audioWorklet) ? '✓' : '✗');
-  setResult('env', 'SpeechRecognition', !!( window.SpeechRecognition || window.webkitSpeechRecognition) ? '✓' : '✗');
-  setResult('env', 'ScriptProcessorNode', 'createScriptProcessor' in (AudioContext?.prototype || {}) || 'createScriptProcessor' in (webkitAudioContext?.prototype || {}) ? '✓' : '✗');
-}
-
-// ========== 2. MEDIARECORDER ==========
-function testMediaRecorder() {
-  const formats = [
-    'audio/webm', 'audio/webm;codecs=opus', 'audio/webm;codecs=vorbis',
-    'audio/mp4', 'audio/mp4;codecs=aac', 'audio/mp4;codecs=mp4a.40.2',
-    'audio/ogg', 'audio/ogg;codecs=opus', 'audio/wav', 'audio/aac'
-  ];
-  for (const fmt of formats) {
-    try {
-      const ok = MediaRecorder.isTypeSupported(fmt);
-      setResult('mr', fmt, ok ? '✓' : '✗', ok ? 'ok' : 'warn');
-    } catch(e) {
-      setResult('mr', fmt, 'error', 'fail');
-    }
-  }
-}
-
-// ========== 3. WEB AUDIO ANALYSER ==========
-async function testAnalyser() {
-  setResult('wa', 'Status', 'Recording 2s...', 'wait');
+  set('1_ENV', 'UA', ua.length > 70 ? ua.substring(0, 70) + '...' : ua);
+  set('1_ENV', 'Platform', navigator.platform);
+  set('1_ENV', 'iOS', /iPad|iPhone|iPod/.test(ua) ? 'YES' : 'no');
+  set('1_ENV', 'getUserMedia', navigator.mediaDevices?.getUserMedia ? '✓' : '✗', navigator.mediaDevices?.getUserMedia ? 'ok' : 'fail');
+  set('1_ENV', 'MediaRecorder', typeof MediaRecorder !== 'undefined' ? '✓' : '✗', typeof MediaRecorder !== 'undefined' ? 'ok' : 'fail');
+  set('1_ENV', 'AudioContext', !!(window.AudioContext || window.webkitAudioContext) ? '✓' : '✗');
+  set('1_ENV', 'SpeechRecognition', !!(window.SpeechRecognition || window.webkitSpeechRecognition) ? '✓' : '✗');
   
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  setResult('wa', 'Context state (pre-resume)', ctx.state);
-  await ctx.resume();
-  setResult('wa', 'Context state (post-resume)', ctx.state);
-  setResult('wa', 'Sample rate', ctx.sampleRate + ' Hz');
-  
-  const source = ctx.createMediaStreamSource(globalStream);
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 512;
-  analyser.smoothingTimeConstant = 0.3;
-  source.connect(analyser);
-  
-  const data = new Uint8Array(analyser.frequencyBinCount);
-  let maxRms = 0;
-  let nonZeroCount = 0;
-  let totalSamples = 0;
-  let rmsHistory = [];
-  
-  await new Promise(resolve => {
-    const start = Date.now();
-    function tick() {
-      if (Date.now() - start > 2000) { resolve(); return; }
-      analyser.getByteTimeDomainData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) {
-        const v = data[i] - 128;
-        sum += v * v;
-        if (data[i] !== 128) nonZeroCount++;
-      }
-      totalSamples += data.length;
-      const rms = Math.sqrt(sum / data.length);
-      if (rms > maxRms) maxRms = rms;
-      rmsHistory.push(rms.toFixed(2));
-      
-      const meter = document.getElementById('waMeter');
-      if (meter) meter.style.width = Math.min(100, rms * 200) + '%';
-      
-      appendLog('waLog', `RMS: ${rms.toFixed(3)} | non-zero: ${nonZeroCount}/${totalSamples}`);
-      requestAnimationFrame(tick);
-    }
-    tick();
-  });
-  
-  ctx.close();
-  
-  const allZero = maxRms < 0.5;
-  setResult('wa', 'Status', allZero ? 'NO DATA (all ~zero)' : 'Getting data', allZero ? 'fail' : 'ok');
-  setResult('wa', 'Max RMS (0-128 scale)', maxRms.toFixed(2), maxRms < 1 ? 'fail' : 'ok');
-  setResult('wa', 'Non-zero samples', `${nonZeroCount}/${totalSamples}`, nonZeroCount < 10 ? 'fail' : 'ok');
-  setResult('wa', 'RMS samples (last 5)', rmsHistory.slice(-5).join(', '));
-}
-
-// ========== 4. CHUNK DECODE ==========
-async function testChunkDecode() {
-  setResult('cd', 'Status', 'Recording 2s with 250ms chunks...', 'wait');
-  
-  let mimeType = 'audio/webm';
-  for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/wav']) {
-    if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
-  }
-  
-  const recorder = new MediaRecorder(globalStream.clone(), { mimeType });
-  const chunks = [];
-  let decodeSuccesses = 0;
-  let decodeFailures = 0;
-  let decodedRmsValues = [];
-  
-  const decCtx = new (window.AudioContext || window.webkitAudioContext)();
-  
-  recorder.ondataavailable = async (e) => {
-    if (!e.data || e.data.size === 0) return;
-    chunks.push({ size: e.data.size, time: Date.now() });
-    appendLog('cdLog', `Chunk #${chunks.length}: ${e.data.size} bytes`);
-    
-    try {
-      const buf = await e.data.arrayBuffer();
-      const audio = await decCtx.decodeAudioData(buf);
-      const samples = audio.getChannelData(0);
-      let sum = 0;
-      for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
-      const rms = Math.sqrt(sum / samples.length);
-      decodedRmsValues.push(rms.toFixed(4));
-      decodeSuccesses++;
-      appendLog('cdLog', `  ✓ Decoded: ${samples.length} samples, RMS=${rms.toFixed(4)}`);
-    } catch(err) {
-      decodeFailures++;
-      appendLog('cdLog', `  ✗ Decode failed: ${err.message}`, '#f87171');
-    }
-  };
-  
-  await new Promise(resolve => {
-    recorder.onstop = resolve;
-    recorder.start(250);
-    setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 2000);
-  });
-  
-  decCtx.close();
-  
-  setResult('cd', 'Status', 'Done');
-  setResult('cd', 'Format', mimeType);
-  setResult('cd', 'Total chunks', chunks.length);
-  setResult('cd', 'Decode success', decodeSuccesses, decodeSuccesses > 0 ? 'ok' : 'fail');
-  setResult('cd', 'Decode failures', decodeFailures, decodeFailures > 0 ? 'warn' : 'ok');
-  setResult('cd', 'Decoded RMS values', decodedRmsValues.join(', ') || 'none', decodedRmsValues.length > 0 ? 'ok' : 'fail');
-  setResult('cd', 'Chunk sizes', chunks.map(c => c.size).join(', '));
-  
-  // Also test: can we decode the FULL blob?
-  if (chunks.length > 0) {
-    try {
-      // Re-record to get actual blobs
-      appendLog('cdLog', 'Testing full-blob decode...');
-      setResult('cd', 'Full blob decode', 'tested separately in capture test', 'wait');
-    } catch(e) {
-      setResult('cd', 'Full blob decode', 'error: ' + e.message, 'fail');
-    }
-  }
-}
-
-// ========== 5. SCRIPTPROCESSOR ==========
-async function testScriptProcessor() {
-  setResult('sp', 'Status', 'Recording 2s...', 'wait');
-  
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  await ctx.resume();
-  
-  const source = ctx.createMediaStreamSource(globalStream);
-  const bufSize = 4096;
-  let processor;
+  // Check audioWorklet
   try {
-    processor = ctx.createScriptProcessor(bufSize, 1, 1);
-  } catch(e) {
-    setResult('sp', 'Status', 'createScriptProcessor failed', 'fail');
-    setResult('sp', 'Error', e.message, 'fail');
-    ctx.close();
-    return;
+    const tmp = new (window.AudioContext || window.webkitAudioContext)();
+    set('1_ENV', 'AudioWorklet', tmp.audioWorklet ? '✓' : '✗');
+    tmp.close();
+  } catch(e) { set('1_ENV', 'AudioWorklet', '✗', 'fail'); }
+}
+
+// ===== 2. FORMATS =====
+function test2() {
+  const fmts = ['audio/webm','audio/webm;codecs=opus','audio/mp4','audio/mp4;codecs=aac','audio/ogg','audio/ogg;codecs=opus','audio/wav'];
+  for (const f of fmts) {
+    try { const ok = MediaRecorder.isTypeSupported(f); set('2_FORMATS', f, ok ? '✓' : '✗', ok ? 'ok' : 'warn'); }
+    catch(e) { set('2_FORMATS', f, 'err', 'fail'); }
   }
-  
-  let callCount = 0;
-  let maxRms = 0;
-  let nonZeroSamples = 0;
-  let totalSamples = 0;
-  let rmsHistory = [];
-  
-  source.connect(processor);
-  processor.connect(ctx.destination); // required for onaudioprocess to fire
-  
-  processor.onaudioprocess = (e) => {
-    callCount++;
-    const input = e.inputBuffer.getChannelData(0);
+}
+
+// ===== 3. ANALYSER =====
+async function test3() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  try { await ctx.resume(); } catch(e) {}
+  set('3_ANALYSER', 'ctx.state', ctx.state);
+  set('3_ANALYSER', 'sampleRate', ctx.sampleRate);
+
+  const src = ctx.createMediaStreamSource(stream);
+  const an = ctx.createAnalyser();
+  an.fftSize = 512;
+  src.connect(an);
+  const buf = new Uint8Array(an.frequencyBinCount);
+
+  let maxRms = 0, reads = 0, nonZero = 0;
+  const t0 = Date.now();
+  while (Date.now() - t0 < 2000) {
+    an.getByteTimeDomainData(buf);
     let sum = 0;
-    let nz = 0;
-    for (let i = 0; i < input.length; i++) {
-      sum += input[i] * input[i];
-      if (Math.abs(input[i]) > 0.001) nz++;
-    }
-    totalSamples += input.length;
-    nonZeroSamples += nz;
-    const rms = Math.sqrt(sum / input.length);
+    for (let i = 0; i < buf.length; i++) { const v = buf[i]-128; sum += v*v; if (buf[i]!==128) nonZero++; }
+    const rms = Math.sqrt(sum / buf.length);
     if (rms > maxRms) maxRms = rms;
-    rmsHistory.push(rms.toFixed(4));
-    
-    const meter = document.getElementById('spMeter');
-    if (meter) meter.style.width = Math.min(100, rms * 500) + '%';
-    
-    if (callCount <= 20 || callCount % 5 === 0) {
-      appendLog('spLog', `#${callCount}: RMS=${rms.toFixed(4)}, non-zero=${nz}/${input.length}`);
-    }
-  };
-  
-  await new Promise(r => setTimeout(r, 2000));
-  
-  processor.disconnect();
-  source.disconnect();
-  ctx.close();
-  
-  const gotData = maxRms > 0.005;
-  setResult('sp', 'Status', gotData ? 'Getting data ✓' : 'NO DATA', gotData ? 'ok' : 'fail');
-  setResult('sp', 'Callbacks fired', callCount, callCount > 0 ? 'ok' : 'fail');
-  setResult('sp', 'Max RMS (0-1 scale)', maxRms.toFixed(4), maxRms > 0.005 ? 'ok' : 'fail');
-  setResult('sp', 'Non-zero samples', `${nonZeroSamples}/${totalSamples}`, nonZeroSamples > 10 ? 'ok' : 'fail');
-  setResult('sp', 'Last 5 RMS', rmsHistory.slice(-5).join(', '));
+    reads++;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  src.disconnect(); ctx.close();
+
+  set('3_ANALYSER', 'readings', reads);
+  set('3_ANALYSER', 'maxRMS (0-128)', maxRms.toFixed(2), maxRms > 1 ? 'ok' : 'fail');
+  set('3_ANALYSER', 'nonZero samples', nonZero, nonZero > 50 ? 'ok' : 'fail');
+  set('3_ANALYSER', 'verdict', maxRms > 1 ? 'WORKS' : 'NO DATA', maxRms > 1 ? 'ok' : 'fail');
 }
 
-// ========== 6. AUDIOWORKLET ==========
-async function testAudioWorklet() {
-  setResult('aw', 'Status', 'Testing...', 'wait');
-  
+// ===== 4. SCRIPTPROCESSOR =====
+async function test4() {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  await ctx.resume();
-  
+  try { await ctx.resume(); } catch(e) {}
+  const src = ctx.createMediaStreamSource(stream);
+  let proc;
+  try { proc = ctx.createScriptProcessor(4096, 1, 1); }
+  catch(e) { set('4_SCRIPTPROC', 'available', 'NO: ' + e.message, 'fail'); ctx.close(); return; }
+
+  src.connect(proc);
+  proc.connect(ctx.destination);
+
+  let calls = 0, maxRms = 0, nonZero = 0, total = 0;
+  proc.onaudioprocess = (e) => {
+    calls++;
+    const d = e.inputBuffer.getChannelData(0);
+    let s = 0;
+    for (let i = 0; i < d.length; i++) { s += d[i]*d[i]; if (Math.abs(d[i]) > 0.001) nonZero++; }
+    total += d.length;
+    const rms = Math.sqrt(s / d.length);
+    if (rms > maxRms) maxRms = rms;
+  };
+
+  await new Promise(r => setTimeout(r, 2000));
+  proc.disconnect(); src.disconnect(); ctx.close();
+
+  set('4_SCRIPTPROC', 'callbacks', calls, calls > 0 ? 'ok' : 'fail');
+  set('4_SCRIPTPROC', 'maxRMS (0-1)', maxRms.toFixed(4), maxRms > 0.005 ? 'ok' : 'fail');
+  set('4_SCRIPTPROC', 'nonZero', `${nonZero}/${total}`, nonZero > 10 ? 'ok' : 'fail');
+  set('4_SCRIPTPROC', 'verdict', maxRms > 0.005 ? 'WORKS' : 'NO DATA', maxRms > 0.005 ? 'ok' : 'fail');
+}
+
+// ===== 5. AUDIOWORKLET =====
+async function test5() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  try { await ctx.resume(); } catch(e) {}
+
   if (!ctx.audioWorklet) {
-    setResult('aw', 'Status', 'audioWorklet not available', 'fail');
-    ctx.close();
-    return;
+    set('5_WORKLET', 'verdict', 'NOT AVAILABLE', 'fail');
+    ctx.close(); return;
   }
-  
+
   try {
-    const processorCode = `
-      class RmsProcessor extends AudioWorkletProcessor {
-        constructor() { super(); this._count = 0; }
-        process(inputs) {
-          const input = inputs[0];
-          if (input.length > 0) {
-            const data = input[0];
-            let sum = 0;
-            for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-            const rms = Math.sqrt(sum / data.length);
-            this._count++;
-            if (this._count % 10 === 0 || rms > 0.01) {
-              this.port.postMessage({ rms, count: this._count, len: data.length });
-            }
-          }
-          return true;
-        }
-      }
-      registerProcessor('rms-processor', RmsProcessor);
-    `;
-    
-    const blob = new Blob([processorCode], { type: 'application/javascript' });
+    const code = `class P extends AudioWorkletProcessor{constructor(){super();this.c=0;}process(i){const d=i[0]?.[0];if(d){let s=0;for(let j=0;j<d.length;j++)s+=d[j]*d[j];this.c++;if(this.c%10===0)this.port.postMessage(Math.sqrt(s/d.length));}return true;}}registerProcessor('p',P);`;
+    const blob = new Blob([code], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
     await ctx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
-    
-    const source = ctx.createMediaStreamSource(globalStream);
-    const workletNode = new AudioWorkletNode(ctx, 'rms-processor');
-    source.connect(workletNode);
-    workletNode.connect(ctx.destination);
-    
-    let msgCount = 0;
-    let maxRms = 0;
-    let rmsHistory = [];
-    
-    workletNode.port.onmessage = (e) => {
-      msgCount++;
-      const { rms, count, len } = e.data;
-      if (rms > maxRms) maxRms = rms;
-      rmsHistory.push(rms.toFixed(4));
-      
-      const meter = document.getElementById('awMeter');
-      if (meter) meter.style.width = Math.min(100, rms * 500) + '%';
-      
-      appendLog('awLog', `#${count}: RMS=${rms.toFixed(4)} (${len} samples)`);
-    };
-    
+
+    const src = ctx.createMediaStreamSource(stream);
+    const node = new AudioWorkletNode(ctx, 'p');
+    src.connect(node); node.connect(ctx.destination);
+
+    let msgs = 0, maxRms = 0;
+    node.port.onmessage = (e) => { msgs++; if (e.data > maxRms) maxRms = e.data; };
+
     await new Promise(r => setTimeout(r, 2000));
-    
-    workletNode.disconnect();
-    source.disconnect();
-    
-    const gotData = maxRms > 0.005;
-    setResult('aw', 'Status', gotData ? 'Getting data ✓' : 'NO DATA', gotData ? 'ok' : 'fail');
-    setResult('aw', 'Messages received', msgCount, msgCount > 0 ? 'ok' : 'fail');
-    setResult('aw', 'Max RMS', maxRms.toFixed(4), maxRms > 0.005 ? 'ok' : 'fail');
-    setResult('aw', 'Last 5 RMS', rmsHistory.slice(-5).join(', '));
-    
+    node.disconnect(); src.disconnect();
+
+    set('5_WORKLET', 'messages', msgs, msgs > 0 ? 'ok' : 'fail');
+    set('5_WORKLET', 'maxRMS (0-1)', maxRms.toFixed(4), maxRms > 0.005 ? 'ok' : 'fail');
+    set('5_WORKLET', 'verdict', maxRms > 0.005 ? 'WORKS' : 'NO DATA', maxRms > 0.005 ? 'ok' : 'fail');
   } catch(e) {
-    setResult('aw', 'Status', 'Error: ' + e.message, 'fail');
-    setResult('aw', 'Error details', e.stack?.split('\n')[0] || '', 'fail');
+    set('5_WORKLET', 'error', e.message, 'fail');
+    set('5_WORKLET', 'verdict', 'ERROR', 'fail');
   }
-  
   ctx.close();
 }
 
-// ========== 7. TIMING ==========
-async function testTiming() {
-  const t0 = performance.now();
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const t1 = performance.now();
-  await ctx.resume();
-  const t2 = performance.now();
-  ctx.close();
-  
-  setResult('tm', 'AudioContext create', Math.round(t1 - t0) + 'ms');
-  setResult('tm', 'AudioContext resume', Math.round(t2 - t1) + 'ms');
-  
-  // getUserMedia was already called, measure a fresh one
-  const t3 = performance.now();
-  try {
-    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const t4 = performance.now();
-    s.getTracks().forEach(t => t.stop());
-    setResult('tm', 'getUserMedia', Math.round(t4 - t3) + 'ms');
-  } catch(e) {
-    setResult('tm', 'getUserMedia', 'failed: ' + e.message, 'fail');
+// ===== 6. CHUNK DECODE =====
+async function test6() {
+  let mime = 'audio/webm';
+  for (const f of ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/wav']) {
+    if (MediaRecorder.isTypeSupported(f)) { mime = f; break; }
   }
-  
-  // MediaRecorder start latency
-  let mimeType = 'audio/webm';
-  for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
-    if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
-  }
-  
-  const testStream = globalStream.clone();
-  const rec = new MediaRecorder(testStream, { mimeType });
-  const t5 = performance.now();
-  let firstChunkTime = 0;
-  rec.ondataavailable = (e) => {
-    if (!firstChunkTime && e.data.size > 0) firstChunkTime = performance.now();
-  };
-  rec.start(100);
-  await new Promise(r => setTimeout(r, 500));
-  rec.stop();
-  await new Promise(r => { rec.onstop = r; });
-  testStream.getTracks().forEach(t => t.stop());
-  
-  setResult('tm', 'First chunk delay', firstChunkTime ? Math.round(firstChunkTime - t5) + 'ms' : 'no chunks', firstChunkTime ? 'ok' : 'fail');
-}
+  set('6_CHUNKDEC', 'format', mime);
 
-// ========== 8. FULL CAPTURE ==========
-async function runFullCapture() {
-  document.getElementById('runCapture').disabled = true;
-  setResult('fc', 'Status', 'Recording 3s with all monitors...', 'wait');
-  document.getElementById('fcLog').style.display = 'block';
-  
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  await ctx.resume();
-  const source = ctx.createMediaStreamSource(globalStream);
-  
-  // Analyser
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 512;
-  source.connect(analyser);
-  const analyserData = new Uint8Array(analyser.frequencyBinCount);
-  let analyserMaxRms = 0;
-  let analyserReadings = 0;
-  
-  // ScriptProcessor
-  let spMaxRms = 0;
-  let spCallbacks = 0;
-  let processor = null;
-  try {
-    processor = ctx.createScriptProcessor(4096, 1, 1);
-    source.connect(processor);
-    processor.connect(ctx.destination);
-    processor.onaudioprocess = (e) => {
-      spCallbacks++;
-      const d = e.inputBuffer.getChannelData(0);
-      let s = 0;
-      for (let i = 0; i < d.length; i++) s += d[i] * d[i];
-      const rms = Math.sqrt(s / d.length);
-      if (rms > spMaxRms) spMaxRms = rms;
-    };
-  } catch(e) {
-    appendLog('fcLog', 'ScriptProcessor unavailable', '#fbbf24');
-  }
-  
-  // MediaRecorder chunks
-  let mimeType = 'audio/webm';
-  for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
-    if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; }
-  }
-  const rec = new MediaRecorder(globalStream.clone(), { mimeType });
-  let chunkCount = 0;
-  let chunkDecodeOk = 0;
-  let chunkDecodeFail = 0;
-  let chunkMaxRms = 0;
+  const rec = new MediaRecorder(stream.clone(), { mimeType: mime });
   const decCtx = new (window.AudioContext || window.webkitAudioContext)();
-  
+  let chunks = 0, decOk = 0, decFail = 0, maxRms = 0, failReasons = [];
+
   rec.ondataavailable = async (e) => {
     if (!e.data || e.data.size === 0) return;
-    chunkCount++;
+    chunks++;
     try {
       const buf = await e.data.arrayBuffer();
       const audio = await decCtx.decodeAudioData(buf);
-      const samples = audio.getChannelData(0);
+      const d = audio.getChannelData(0);
       let s = 0;
-      for (let i = 0; i < samples.length; i++) s += samples[i] * samples[i];
-      const rms = Math.sqrt(s / samples.length);
-      if (rms > chunkMaxRms) chunkMaxRms = rms;
-      chunkDecodeOk++;
-      appendLog('fcLog', `Chunk #${chunkCount}: decoded, RMS=${rms.toFixed(4)}`);
+      for (let i = 0; i < d.length; i++) s += d[i]*d[i];
+      const rms = Math.sqrt(s / d.length);
+      if (rms > maxRms) maxRms = rms;
+      decOk++;
     } catch(err) {
-      chunkDecodeFail++;
-      appendLog('fcLog', `Chunk #${chunkCount}: decode FAILED`, '#f87171');
+      decFail++;
+      if (failReasons.length < 3) failReasons.push(err.message);
     }
   };
-  
-  // Analyser poll
-  const analyserInterval = setInterval(() => {
-    analyser.getByteTimeDomainData(analyserData);
-    let sum = 0;
-    for (let i = 0; i < analyserData.length; i++) {
-      const v = analyserData[i] - 128;
-      sum += v * v;
-    }
-    const rms = Math.sqrt(sum / analyserData.length);
-    if (rms > analyserMaxRms) analyserMaxRms = rms;
-    analyserReadings++;
-    if (analyserReadings % 5 === 0) {
-      appendLog('fcLog', `Analyser: RMS=${rms.toFixed(2)} | SP: callbacks=${spCallbacks}, maxRMS=${spMaxRms.toFixed(4)}`);
-    }
-  }, 100);
-  
-  rec.start(250);
-  const captureStart = Date.now();
-  appendLog('fcLog', '▶ Recording started');
-  
-  await new Promise(r => setTimeout(r, 3000));
-  
-  clearInterval(analyserInterval);
-  if (rec.state !== 'inactive') rec.stop();
-  if (processor) { processor.disconnect(); }
-  source.disconnect();
-  ctx.close();
+
+  await new Promise(resolve => {
+    rec.onstop = () => setTimeout(resolve, 500); // wait for pending decodes
+    rec.start(250);
+    setTimeout(() => { if (rec.state !== 'inactive') rec.stop(); }, 2000);
+  });
   decCtx.close();
-  
-  const duration = Date.now() - captureStart;
-  appendLog('fcLog', `⏹ Stopped after ${duration}ms`);
-  
-  setResult('fc', 'Status', 'Done');
-  setResult('fc', 'Duration', duration + 'ms');
-  setResult('fc', 'Analyser max RMS (0-128)', analyserMaxRms.toFixed(2), analyserMaxRms > 1 ? 'ok' : 'fail');
-  setResult('fc', 'Analyser readings', analyserReadings);
-  setResult('fc', 'ScriptProc callbacks', spCallbacks, spCallbacks > 0 ? 'ok' : 'fail');
-  setResult('fc', 'ScriptProc max RMS (0-1)', spMaxRms.toFixed(4), spMaxRms > 0.005 ? 'ok' : 'fail');
-  setResult('fc', 'Chunks recorded', chunkCount);
-  setResult('fc', 'Chunks decoded OK', chunkDecodeOk, chunkDecodeOk > 0 ? 'ok' : 'fail');
-  setResult('fc', 'Chunks decode FAIL', chunkDecodeFail, chunkDecodeFail > 0 ? 'warn' : 'ok');
-  setResult('fc', 'Chunk max RMS (0-1)', chunkMaxRms.toFixed(4), chunkMaxRms > 0.005 ? 'ok' : 'fail');
-  
-  // SUMMARY
-  const methods = [];
-  if (analyserMaxRms > 1) methods.push('AnalyserNode');
-  if (spMaxRms > 0.005) methods.push('ScriptProcessor');
-  if (chunkMaxRms > 0.005) methods.push('ChunkDecode');
-  setResult('fc', '✅ WORKING METHODS', methods.length > 0 ? methods.join(', ') : 'NONE', methods.length > 0 ? 'ok' : 'fail');
-  
-  document.getElementById('runCapture').disabled = false;
+
+  set('6_CHUNKDEC', 'total chunks', chunks);
+  set('6_CHUNKDEC', 'decoded OK', decOk, decOk > 0 ? 'ok' : 'fail');
+  set('6_CHUNKDEC', 'decode FAIL', decFail, decFail > 0 ? 'warn' : 'ok');
+  if (failReasons.length > 0) set('6_CHUNKDEC', 'fail reasons', failReasons.join('; '), 'warn');
+  set('6_CHUNKDEC', 'maxRMS (0-1)', maxRms.toFixed(4), maxRms > 0.005 ? 'ok' : 'fail');
+  set('6_CHUNKDEC', 'verdict', decOk > 0 && maxRms > 0.005 ? 'WORKS' : 'NO DATA', decOk > 0 && maxRms > 0.005 ? 'ok' : 'fail');
+
+  // Test: full blob decode (assemble all chunks then decode)
+  // This tests if the issue is per-chunk vs full recording
+  set('6_CHUNKDEC', 'full blob test', 'see test 7');
 }
 
-// ========== RUN ALL ==========
-async function runAll() {
-  const btn = document.getElementById('runAll');
-  btn.disabled = true;
-  btn.textContent = 'Getting mic...';
-  
+// ===== 7. FULL BLOB + TIMING =====
+async function test7() {
+  let mime = 'audio/webm';
+  for (const f of ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/wav']) {
+    if (MediaRecorder.isTypeSupported(f)) { mime = f; break; }
+  }
+
+  const allChunks = [];
+  const rec = new MediaRecorder(stream.clone(), { mimeType: mime });
+  rec.ondataavailable = (e) => { if (e.data?.size > 0) allChunks.push(e.data); };
+
+  const t0 = performance.now();
+  rec.start(500);
+  const t1 = performance.now();
+  set('7_TIMING', 'rec.start()', Math.round(t1-t0) + 'ms');
+
+  await new Promise(resolve => {
+    rec.onstop = resolve;
+    setTimeout(() => { if (rec.state !== 'inactive') rec.stop(); }, 2000);
+  });
+
+  set('7_TIMING', 'chunks collected', allChunks.length);
+
+  if (allChunks.length > 0) {
+    const blob = new Blob(allChunks, { type: mime });
+    set('7_TIMING', 'full blob size', blob.size + ' bytes');
+
+    // Try decoding full blob
+    const decCtx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      const t2 = performance.now();
+      const buf = await blob.arrayBuffer();
+      const audio = await decCtx.decodeAudioData(buf);
+      const t3 = performance.now();
+      const d = audio.getChannelData(0);
+      let s = 0;
+      for (let i = 0; i < d.length; i++) s += d[i]*d[i];
+      const rms = Math.sqrt(s / d.length);
+      set('7_TIMING', 'full decode time', Math.round(t3-t2) + 'ms');
+      set('7_TIMING', 'full decode RMS', rms.toFixed(4), rms > 0.005 ? 'ok' : 'fail');
+      set('7_TIMING', 'full decode samples', d.length);
+      set('7_TIMING', 'full decode verdict', rms > 0.005 ? 'WORKS' : 'NO DATA', rms > 0.005 ? 'ok' : 'fail');
+    } catch(e) {
+      set('7_TIMING', 'full decode', 'FAILED: ' + e.message, 'fail');
+    }
+    decCtx.close();
+  }
+
+  // getUserMedia timing (fresh)
   try {
-    globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const t4 = performance.now();
+    const s2 = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const t5 = performance.now();
+    s2.getTracks().forEach(t => t.stop());
+    set('7_TIMING', 'getUserMedia', Math.round(t5-t4) + 'ms');
+  } catch(e) { set('7_TIMING', 'getUserMedia', 'err', 'fail'); }
+}
+
+// ===== 8. SUMMARY =====
+function test8() {
+  const working = [];
+  if (ALL['3_ANALYSER']?.verdict?.v === 'WORKS') working.push('AnalyserNode');
+  if (ALL['4_SCRIPTPROC']?.verdict?.v === 'WORKS') working.push('ScriptProcessor');
+  if (ALL['5_WORKLET']?.verdict?.v === 'WORKS') working.push('AudioWorklet');
+  if (ALL['6_CHUNKDEC']?.verdict?.v === 'WORKS') working.push('ChunkDecode(250ms)');
+  if (ALL['7_TIMING']?.['full decode verdict']?.v === 'WORKS') working.push('FullBlobDecode');
+
+  set('8_SUMMARY', '✅ Working methods', working.length > 0 ? working.join(', ') : 'NONE', working.length > 0 ? 'ok' : 'fail');
+  set('8_SUMMARY', '❌ Failed methods', Object.entries({
+    'AnalyserNode': ALL['3_ANALYSER']?.verdict?.v !== 'WORKS',
+    'ScriptProcessor': ALL['4_SCRIPTPROC']?.verdict?.v !== 'WORKS',
+    'AudioWorklet': ALL['5_WORKLET']?.verdict?.v !== 'WORKS',
+    'ChunkDecode': ALL['6_CHUNKDEC']?.verdict?.v !== 'WORKS',
+    'FullBlobDecode': ALL['7_TIMING']?.['full decode verdict']?.v !== 'WORKS',
+  }).filter(([,f]) => f).map(([n]) => n).join(', ') || 'none', 'warn');
+  
+  // Recommendation
+  let rec = 'No viable method found — tap-to-submit only';
+  if (working.includes('ScriptProcessor')) rec = 'Use ScriptProcessor for real-time silence detection';
+  else if (working.includes('AudioWorklet')) rec = 'Use AudioWorklet for real-time silence detection';
+  else if (working.includes('AnalyserNode')) rec = 'Use AnalyserNode for real-time silence detection';
+  else if (working.includes('FullBlobDecode')) rec = 'Post-hoc silence trim possible (not real-time)';
+  else if (working.includes('ChunkDecode(250ms)')) rec = 'Use chunk decode for 250ms-resolution silence detection';
+  set('8_SUMMARY', '💡 Recommendation', rec);
+}
+
+// ===== RUN ALL =====
+async function run() {
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  prog('Getting mic...');
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch(e) {
-    btn.textContent = 'Mic denied — tap to retry';
+    prog('Mic denied!');
+    set('1_ENV', 'mic', 'DENIED: ' + e.message, 'fail');
     btn.disabled = false;
-    setResult('env', 'Mic access', 'DENIED: ' + e.message, 'fail');
     return;
   }
-  
-  btn.textContent = 'Running tests... (speak into mic)';
-  
-  // 1. Environment
-  testEnvironment();
-  
-  // 2. MediaRecorder formats
-  testMediaRecorder();
-  
-  // 3. Analyser (2s)
-  await testAnalyser();
-  
-  // 4. Chunk decode (2s)
-  await testChunkDecode();
-  
-  // 5. ScriptProcessor (2s)
-  await testScriptProcessor();
-  
-  // 6. AudioWorklet (2s)
-  await testAudioWorklet();
-  
-  // 7. Timing
-  await testTiming();
-  
-  btn.textContent = '✓ Tests complete — run capture test below';
-  btn.disabled = true;
-  document.getElementById('runCapture').disabled = false;
+
+  const tests = [
+    ['1/7 Environment', test1],
+    ['2/7 Formats', test2],
+    ['3/7 AnalyserNode (2s — speak!)', test3],
+    ['4/7 ScriptProcessor (2s — speak!)', test4],
+    ['5/7 AudioWorklet (2s — speak!)', test5],
+    ['6/7 Chunk decode (2s — speak!)', test6],
+    ['7/7 Full blob + timing (2s)', test7],
+  ];
+
+  for (const [label, fn] of tests) {
+    prog(label);
+    try {
+      await withTimeout(async () => await fn(), 8000);
+    } catch(e) {
+      const sec = label.split(' ')[1];
+      set(sec || label, 'error', 'TIMEOUT or crash: ' + e.message, 'fail');
+    }
+  }
+
+  prog('Building summary...');
+  test8();
+  prog('✓ Done! Copy results below.');
+
+  stream.getTracks().forEach(t => t.stop());
+  btn.textContent = '✓ Complete';
 }
 
-// ========== COPY ==========
-function copyResults() {
-  let text = '=== Safari Audio Diagnostics ===\n';
-  text += `Date: ${new Date().toISOString()}\n`;
-  text += `UA: ${navigator.userAgent}\n\n`;
-  
-  for (const [section, data] of Object.entries(R)) {
-    text += `--- ${section.toUpperCase()} ---\n`;
-    for (const [k, v] of Object.entries(data)) {
-      text += `${k}: ${v.value}\n`;
-    }
-    text += '\n';
+// ===== COPY =====
+function copyAll() {
+  let t = '=== Safari Audio Diagnostics v2 ===\n';
+  t += `Date: ${new Date().toISOString()}\n`;
+  t += `UA: ${navigator.userAgent}\n\n`;
+  for (const [sec, data] of Object.entries(ALL)) {
+    t += `--- ${sec} ---\n`;
+    for (const [k, d] of Object.entries(data)) t += `${k}: ${d.v}\n`;
+    t += '\n';
   }
-  
-  navigator.clipboard?.writeText(text).then(() => {
-    alert('Copied to clipboard!');
-  }).catch(() => {
-    // Fallback
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    alert('Copied!');
-  });
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(t).then(() => alert('Copied!')).catch(() => fallbackCopy(t));
+  } else { fallbackCopy(t); }
+}
+function fallbackCopy(t) {
+  const ta = document.createElement('textarea');
+  ta.value = t; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); alert('Copied!'); } catch(e) { alert('Copy failed — select all text manually'); }
+  document.body.removeChild(ta);
 }
 </script>
-
 </body>
 </html>
