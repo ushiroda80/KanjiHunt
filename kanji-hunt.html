@@ -554,7 +554,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // Uses MediaRecorder API (works everywhere) → sends audio to Google Cloud STT API
     // Includes silence detection via AnalyserNode for auto-stop
     const recognizeWithCloudSTT = (googleKey, lang = 'ja-JP') => {
-      const ctrl = { stop: null, rms: 0 };
+      const ctrl = { stop: null, updateMeter: null };
       const promise = new Promise(async (resolve, reject) => {
         if (!googleKey) return reject(new Error('No Google API key'));
         
@@ -604,13 +604,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
           analyser = null;
         }
         
-        const cleanup = () => {
-          if (rafId) cancelAnimationFrame(rafId);
-          if (audioCtx) { audioCtx.close(); audioCtx = null; }
-        };
-        
         const doStop = () => {
-          if (!stopped) { stopped = true; clearTimeout(autoStop); cleanup(); recorder.stop(); }
+          if (!stopped) { stopped = true; clearTimeout(autoStop); recorder.stop(); }
         };
         
         recorder.ondataavailable = (e) => {
@@ -619,7 +614,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
         
         recorder.onstop = async () => {
           stream.getTracks().forEach(t => t.stop());
-          cleanup();
+          if (rafId) cancelAnimationFrame(rafId);
+          if (audioCtx) { audioCtx.close(); audioCtx = null; }
           if (chunks.length === 0) return reject(new Error('no-audio'));
           
           const blob = new Blob(chunks, { type: mimeType });
@@ -691,7 +687,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
           if (!stopped) { console.log('[CloudSTT] Hard cap reached'); doStop(); }
         }, 5500);
         
-        // Silence detection loop
+        // Silence detection loop — updates meter DOM directly (no React re-renders)
         if (analyser) {
           const buf = new Uint8Array(analyser.frequencyBinCount);
           const recStart = Date.now();
@@ -701,8 +697,10 @@ Return 1-3 options max. Return ONLY the JSON array.`
             let sum = 0;
             for (let i = 0; i < buf.length; i++) { const v = buf[i] - 128; sum += v * v; }
             const rms = Math.sqrt(sum / buf.length);
-            ctrl.rms = rms;
             const now = Date.now();
+            
+            // Update volume meter directly via DOM ref callback
+            if (ctrl.updateMeter) ctrl.updateMeter(rms);
             
             if (!speechDetected) {
               if (rms > SPEECH_THRESH) {
@@ -848,7 +846,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.47.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.48.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2545,25 +2543,9 @@ Return 1-3 options max. Return ONLY the JSON array.`
       const [showTipModal, setShowTipModal] = useState(false);
       const [debugLog, setDebugLog] = useState([]);
       const [showDebugLog, setShowDebugLog] = useState(false);
-      const [volumeLevel, setVolumeLevel] = useState(0);
       const recStartTimeRef = useRef(0);
       const hadInterimRef = useRef(false);
-      const volumeRafRef = useRef(null);
-      
-      // Poll volume from Cloud STT analyser for visual feedback
-      React.useEffect(() => {
-        if (status === 'listening' && speechMethod === 'cloudSTT') {
-          const poll = () => {
-            const rms = activeRecRef.current?.ctrl?.rms || 0;
-            setVolumeLevel(rms);
-            volumeRafRef.current = requestAnimationFrame(poll);
-          };
-          volumeRafRef.current = requestAnimationFrame(poll);
-          return () => { if (volumeRafRef.current) cancelAnimationFrame(volumeRafRef.current); };
-        } else {
-          setVolumeLevel(0);
-        }
-      }, [status, speechMethod]);
+      const volumeBarRef = useRef(null);
       
       const capLog = useCallback((msg, level = 'info') => {
         const elapsed = recStartTimeRef.current ? Date.now() - recStartTimeRef.current : 0;
@@ -2761,6 +2743,15 @@ Return 1-3 options max. Return ONLY the JSON array.`
           
           const sttPromise = recognizeWithCloudSTT(gKey, recognizerLang);
           activeRecRef.current = { stop: () => sttPromise.ctrl?.stop?.(), abort: () => sttPromise.ctrl?.stop?.(), ctrl: sttPromise.ctrl };
+          
+          // Bind volume meter DOM update — direct mutation, no React re-renders
+          sttPromise.ctrl.updateMeter = (rms) => {
+            const el = volumeBarRef.current;
+            if (el) {
+              el.style.width = Math.min(100, rms * 8) + '%';
+              el.style.background = rms > 4 ? '#ffe600' : 'rgba(255,255,255,0.12)';
+            }
+          };
           
           sttPromise.then(result => {
             clearInterval(countdownId);
@@ -3043,7 +3034,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               </p>
               {speechMethod === 'cloudSTT' && (
                 <div style={{ marginTop: '16px', width: '160px', height: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', borderRadius: '2px', width: Math.min(100, volumeLevel * 8) + '%', background: volumeLevel > 4 ? '#ffe600' : 'rgba(255,255,255,0.12)', transition: 'width 0.06s' }}/>
+                  <div ref={volumeBarRef} style={{ height: '100%', borderRadius: '2px', width: '0%', background: 'rgba(255,255,255,0.12)', transition: 'width 0.06s' }}/>
                 </div>
               )}
               {transcript && <p style={{ marginTop: '24px', fontSize: '32px', fontWeight: '800', color: '#ffe600' }}>{transcript}</p>}
@@ -3528,7 +3519,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.47.0 loaded');
+      console.log('[Kanji Hunt] v2.48.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
