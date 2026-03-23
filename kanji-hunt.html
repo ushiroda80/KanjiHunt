@@ -552,6 +552,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     
     // Google Cloud Speech-to-Text — fallback for iOS Safari and non-Chrome browsers
     // Uses MediaRecorder API (works everywhere) → sends audio to Google Cloud STT API
+    // Includes silence detection via AnalyserNode for auto-stop
     const recognizeWithCloudSTT = (googleKey, lang = 'ja-JP') => {
       const ctrl = { stop: null };
       const promise = new Promise(async (resolve, reject) => {
@@ -576,12 +577,49 @@ Return 1-3 options max. Return ONLY the JSON array.`
         const chunks = [];
         let stopped = false;
         
+        // Silence detection via AnalyserNode
+        // Thresholds tuned from Safari iOS 18.7 diagnostics (max RMS ~12.77 on 0-128 scale)
+        const SPEECH_THRESH = 4;
+        const SILENCE_THRESH = 2;
+        const SILENCE_MS = 800;
+        const MIN_SPEECH_MS = 400;
+        let audioCtx = null;
+        let analyser = null;
+        let rafId = null;
+        let speechDetected = false;
+        let speechStart = 0;
+        let silenceStart = 0;
+        
+        try {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          if (audioCtx.state === 'suspended') await audioCtx.resume();
+          const source = audioCtx.createMediaStreamSource(stream);
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 512;
+          analyser.smoothingTimeConstant = 0.1;
+          source.connect(analyser);
+          console.log('[CloudSTT] AnalyserNode connected, sampleRate:', audioCtx.sampleRate);
+        } catch(e) {
+          console.warn('[CloudSTT] AnalyserNode setup failed, falling back to timeout only:', e.message);
+          analyser = null;
+        }
+        
+        const cleanup = () => {
+          if (rafId) cancelAnimationFrame(rafId);
+          if (audioCtx) { audioCtx.close(); audioCtx = null; }
+        };
+        
+        const doStop = () => {
+          if (!stopped) { stopped = true; clearTimeout(autoStop); cleanup(); recorder.stop(); }
+        };
+        
         recorder.ondataavailable = (e) => {
           if (e.data && e.data.size > 0) chunks.push(e.data);
         };
         
         recorder.onstop = async () => {
           stream.getTracks().forEach(t => t.stop());
+          cleanup();
           if (chunks.length === 0) return reject(new Error('no-audio'));
           
           const blob = new Blob(chunks, { type: mimeType });
@@ -617,7 +655,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
             });
             
             if (!response.ok) {
-              // If WEBM_OPUS fails (some Safari versions), retry with OGG_OPUS
               if (encoding === 'WEBM_OPUS') {
                 console.warn('[CloudSTT] WEBM_OPUS failed, retrying with OGG_OPUS...');
                 const retry = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${googleKey}`, {
@@ -645,18 +682,54 @@ Return 1-3 options max. Return ONLY the JSON array.`
           }
         };
         
-        // Start recording with 1000ms timeslice (helps Safari produce valid chunks)
+        // Start recording with 1000ms timeslice
         recorder.start(1000);
         console.log('[CloudSTT] Recording started');
         
-        // Auto-stop after 5.5 seconds
+        // Hard cap auto-stop (5.5s safety net)
         const autoStop = setTimeout(() => {
-          if (!stopped) { stopped = true; recorder.stop(); }
+          if (!stopped) { console.log('[CloudSTT] Hard cap reached'); doStop(); }
         }, 5500);
         
-        ctrl.stop = () => {
-          if (!stopped) { stopped = true; clearTimeout(autoStop); recorder.stop(); }
-        };
+        // Silence detection loop
+        if (analyser) {
+          const buf = new Uint8Array(analyser.frequencyBinCount);
+          const recStart = Date.now();
+          (function tick() {
+            if (stopped) return;
+            analyser.getByteTimeDomainData(buf);
+            let sum = 0;
+            for (let i = 0; i < buf.length; i++) { const v = buf[i] - 128; sum += v * v; }
+            const rms = Math.sqrt(sum / buf.length);
+            const now = Date.now();
+            
+            if (!speechDetected) {
+              if (rms > SPEECH_THRESH) {
+                speechDetected = true;
+                speechStart = now;
+                silenceStart = 0;
+                console.log('[CloudSTT] Speech detected at', now - recStart, 'ms, RMS:', rms.toFixed(1));
+              }
+            } else {
+              if (rms < SILENCE_THRESH) {
+                if (!silenceStart) silenceStart = now;
+                const speechDur = (silenceStart || now) - speechStart;
+                const silDur = now - silenceStart;
+                if (silenceStart && silDur >= SILENCE_MS && speechDur >= MIN_SPEECH_MS) {
+                  console.log('[CloudSTT] Auto-stop: silence', silDur, 'ms after', speechDur, 'ms speech');
+                  doStop();
+                  return;
+                }
+              } else {
+                silenceStart = 0;
+              }
+            }
+            
+            rafId = requestAnimationFrame(tick);
+          })();
+        }
+        
+        ctrl.stop = doStop;
       });
       
       promise.ctrl = ctrl;
@@ -774,7 +847,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.45.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.46.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2940,22 +3013,10 @@ Return 1-3 options max. Return ONLY the JSON array.`
                   <div style={{ width: '24px', height: '24px', borderRadius: '4px', background: '#fff' }}/>
                 </div>
               </div>
-              {(() => {
-                const elapsed = (7 - timeLeft);
-                const isCloud = speechMethod === 'cloudSTT';
-                const fadeProgress = isCloud ? Math.min(1, Math.max(0, (elapsed - 2) / 3)) : 0;
-                const recOpacity = isCloud ? 1 - (fadeProgress * 0.85) : 1;
-                const hintOpacity = isCloud ? 0.5 + (fadeProgress * 0.4) : 0.6;
-                const hintWeight = isCloud && fadeProgress > 0.5 ? '600' : '400';
-                return (
-                  <>
-                    <p style={{ marginTop: '28px', fontSize: '18px', fontWeight: '600', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)', opacity: listeningReady ? recOpacity : 0.1, transition: 'opacity 0.3s' }}>Recording {isJaMode ? 'Japanese' : 'English'}...</p>
-                    <p style={{ marginTop: '8px', fontSize: '14px', color: `rgba(255,255,255,${listeningReady ? hintOpacity : 0})`, fontWeight: hintWeight, transition: 'all 0.3s' }}>
-                      {isCloud ? 'Tap circle when done' : isJaMode ? 'Say a word in Japanese' : 'Say a word in English'}
-                    </p>
-                  </>
-                );
-              })()}
+              <p style={{ marginTop: '28px', fontSize: '18px', fontWeight: '600', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)', transition: 'opacity 0.3s' }}>Recording {isJaMode ? 'Japanese' : 'English'}...</p>
+              <p style={{ marginTop: '8px', fontSize: '14px', color: 'rgba(255,255,255,0.4)', opacity: listeningReady ? 1 : 0 }}>
+                {isJaMode ? 'Say a word in Japanese' : 'Say a word in English'}
+              </p>
               {transcript && <p style={{ marginTop: '24px', fontSize: '32px', fontWeight: '800', color: '#ffe600' }}>{transcript}</p>}
               <p style={{ marginTop: '16px', fontSize: '13px', color: 'rgba(255,255,255,0.2)' }}>{timeLeft}s</p>
               <button onClick={() => { capLog('👆 "Type instead" clicked'); gotFinalRef.current = true; stopCurrentRecognition(); setStatus('manual'); setErrorMessage(''); }} style={{
@@ -3438,7 +3499,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.45.0 loaded');
+      console.log('[Kanji Hunt] v2.46.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
