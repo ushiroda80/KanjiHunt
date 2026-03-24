@@ -553,9 +553,15 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // Google Cloud Speech-to-Text — fallback for iOS Safari and non-Chrome browsers
     // STT Worker code for post-stop pipeline (b64 encode + API call)
     const sttWorkerCode = `
+      var chunkBuffers = [];
       self.onmessage = async function(e) {
-        const t0 = Date.now();
-        const { chunkBuffers, googleKey, lang, mimeType } = e.data;
+        if (e.data.type === 'chunk') {
+          chunkBuffers.push(e.data.data);
+          return;
+        }
+        if (e.data.type !== 'go') return;
+        var t0 = Date.now();
+        var googleKey = e.data.googleKey, lang = e.data.lang, mimeType = e.data.mimeType;
         try {
           var totalLen = 0;
           for (var i = 0; i < chunkBuffers.length; i++) totalLen += chunkBuffers[i].byteLength;
@@ -592,8 +598,9 @@ Return 1-3 options max. Return ONLY the JSON array.`
             alternatives = alts.slice(0, 3);
             confidence = alts[0] ? alts[0].confidence : 0;
           }
-          self.postMessage({ ok: true, transcript, alternatives, confidence, b64Ms, fetchMs, totalMs });
-        } catch(err) { self.postMessage({ error: 'stt-network-error' }); }
+          self.postMessage({ ok: true, transcript, alternatives, confidence, b64Ms, fetchMs, totalMs, chunks: chunkBuffers.length });
+          chunkBuffers = [];
+        } catch(err) { self.postMessage({ error: 'stt-network-error' }); chunkBuffers = []; }
       };
     `;
     
@@ -651,12 +658,19 @@ Return 1-3 options max. Return ONLY the JSON array.`
         let mimeType = 'audio/webm';
         for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/wav']) { if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; } }
         recorder = new MediaRecorder(stream, { mimeType });
-        const chunkBuffers = [];
+        
+        // Create Worker at recording start and stream data to it during recording
+        const wBlob = new Blob([sttWorkerCode], { type: 'application/javascript' });
+        const wUrl = URL.createObjectURL(wBlob);
+        const sttWorker = new Worker(wUrl);
+        
         recorder.ondataavailable = (e) => {
           if (e.data?.size > 0) {
-            // Convert to ArrayBuffer immediately during recording (while main thread is idle between frames)
-            e.data.arrayBuffer().then(ab => { chunkBuffers.push(ab); });
             chunks.push(e.data);
+            // Stream each chunk to Worker immediately (while main thread is idle)
+            e.data.arrayBuffer().then(ab => {
+              sttWorker.postMessage({ type: 'chunk', data: ab }, [ab]);
+            });
           }
         };
         captureT0 = Date.now();
@@ -666,29 +680,18 @@ Return 1-3 options max. Return ONLY the JSON array.`
           if (audioCtx) { audioCtx.close(); audioCtx = null; }
           clearTimeout(stopTimer);
           recording = false;
-          if (chunks.length === 0) return reject(new Error('no-audio'));
+          if (chunks.length === 0) { sttWorker.terminate(); URL.revokeObjectURL(wUrl); return reject(new Error('no-audio')); }
           const recMs = Date.now() - captureT0;
           const totalSize = chunks.reduce((s, c) => s + c.size, 0);
-          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.length + ' pre-converted');
+          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks');
           
           const pipelineT0 = Date.now();
           try {
-            // Wait briefly for any pending arrayBuffer conversions from ondataavailable
-            let waitMs = 0;
-            while (chunkBuffers.length < chunks.length && waitMs < 500) {
-              await new Promise(r => setTimeout(r, 10));
-              waitMs += 10;
-            }
-            logMsg('⏱ AB wait: ' + waitMs + 'ms (' + chunkBuffers.length + '/' + chunks.length + ' ready)');
-            
-            const wBlob = new Blob([sttWorkerCode], { type: 'application/javascript' });
-            const wUrl = URL.createObjectURL(wBlob);
-            const worker = new Worker(wUrl);
-            
+            // Send "go" signal — Worker already has the chunk data
             const result = await new Promise((res, rej) => {
-              worker.onmessage = (e) => { res(e.data); worker.terminate(); URL.revokeObjectURL(wUrl); };
-              worker.onerror = (err) => { rej(new Error('worker-error')); worker.terminate(); URL.revokeObjectURL(wUrl); };
-              worker.postMessage({ chunkBuffers, googleKey, lang, mimeType }, chunkBuffers);
+              sttWorker.onmessage = (e) => { res(e.data); sttWorker.terminate(); URL.revokeObjectURL(wUrl); };
+              sttWorker.onerror = (err) => { rej(new Error('worker-error')); sttWorker.terminate(); URL.revokeObjectURL(wUrl); };
+              sttWorker.postMessage({ type: 'go', googleKey, lang, mimeType });
             });
             
             const pipelineMs = Date.now() - pipelineT0;
@@ -820,7 +823,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.57.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.58.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -3585,7 +3588,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.57.0 loaded');
+      console.log('[Kanji Hunt] v2.58.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
