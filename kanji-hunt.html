@@ -769,7 +769,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.59.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.60.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -873,99 +873,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <SRow icon="🗑️" iconColor="#fee2e2" label="Delete Unpinned Words" sub={`Keep ${pinnedWords.size} pinned, remove the rest`}
                 right={<button onClick={() => { if (confirm('Delete all unpinned words?')) onDeleteUnpinned(); }} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#fee2e2', color: '#991b1b', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Delete</button>}
               />
-            </SCard>
-            
-            <SGroup label="Diagnostics" />
-            <SCard>
-              <div style={{ padding: '12px 16px' }}>
-                <p style={{ fontSize: '10px', color: '#999', marginBottom: '10px' }}>Records 2s of audio then tests 4 base64 encoding methods on the same blob. Results show which is fastest in this app.</p>
-                <button id="b64BenchBtn" onClick={async () => {
-                  const btn = document.getElementById('b64BenchBtn');
-                  const out = document.getElementById('b64BenchOut');
-                  btn.disabled = true;
-                  btn.textContent = '🎤 Recording 2s...';
-                  out.textContent = '';
-                  
-                  let stream;
-                  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch(e) { out.textContent = 'Mic denied'; btn.disabled = false; btn.textContent = 'Run Benchmark'; return; }
-                  
-                  let mime = 'audio/webm';
-                  for (const f of ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/wav']) { if (MediaRecorder.isTypeSupported(f)) { mime = f; break; } }
-                  
-                  const rec = new MediaRecorder(stream, { mimeType: mime });
-                  const chunks = [];
-                  rec.ondataavailable = (e) => { if (e.data?.size > 0) chunks.push(e.data); };
-                  
-                  await new Promise(r => { rec.onstop = r; rec.start(1000); setTimeout(() => { if (rec.state !== 'inactive') rec.stop(); }, 2000); });
-                  stream.getTracks().forEach(t => t.stop());
-                  
-                  const blob = new Blob(chunks, { type: mime });
-                  btn.textContent = `Testing (${blob.size} bytes)...`;
-                  
-                  const results = [];
-                  
-                  // Method 1: FileReader readAsDataURL
-                  try {
-                    const t0 = performance.now();
-                    const r1 = await new Promise((res, rej) => { const f = new FileReader(); f.onloadend = () => res(f.result.split(',')[1]); f.onerror = rej; f.readAsDataURL(blob); });
-                    results.push({ name: 'FileReader dataURL', ms: Math.round(performance.now() - t0), len: r1.length });
-                  } catch(e) { results.push({ name: 'FileReader dataURL', ms: -1, err: e.message }); }
-                  
-                  // Method 2: FileReader arrayBuffer + loop btoa
-                  try {
-                    const t0 = performance.now();
-                    const ab = await new Promise((res, rej) => { const f = new FileReader(); f.onloadend = () => res(f.result); f.onerror = rej; f.readAsArrayBuffer(blob); });
-                    const bytes = new Uint8Array(ab);
-                    let bin = '';
-                    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-                    const r2 = btoa(bin);
-                    results.push({ name: 'FileReader AB + loop', ms: Math.round(performance.now() - t0), len: r2.length });
-                  } catch(e) { results.push({ name: 'FileReader AB + loop', ms: -1, err: e.message }); }
-                  
-                  // Method 3: blob.arrayBuffer + chunked btoa
-                  try {
-                    const t0 = performance.now();
-                    const ab = await blob.arrayBuffer();
-                    const bytes = new Uint8Array(ab);
-                    const CHUNK = 8192;
-                    let bin = '';
-                    for (let i = 0; i < bytes.length; i += CHUNK) { bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)); }
-                    const r3 = btoa(bin);
-                    results.push({ name: 'blob.arrayBuffer + chunk', ms: Math.round(performance.now() - t0), len: r3.length });
-                  } catch(e) { results.push({ name: 'blob.arrayBuffer + chunk', ms: -1, err: e.message }); }
-                  
-                  // Method 4: Web Worker
-                  try {
-                    const t0 = performance.now();
-                    const workerCode = `self.onmessage = async (e) => { const bytes = new Uint8Array(e.data); const CHUNK = 8192; let bin = ''; for (let i = 0; i < bytes.length; i += CHUNK) { bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)); } self.postMessage(btoa(bin)); };`;
-                    const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
-                    const workerUrl = URL.createObjectURL(workerBlob);
-                    const worker = new Worker(workerUrl);
-                    const ab = await blob.arrayBuffer();
-                    const r4 = await new Promise((res, rej) => {
-                      worker.onmessage = (e) => { res(e.data); worker.terminate(); URL.revokeObjectURL(workerUrl); };
-                      worker.onerror = (e) => { rej(new Error('worker error')); worker.terminate(); URL.revokeObjectURL(workerUrl); };
-                      worker.postMessage(ab, [ab]);
-                    });
-                    results.push({ name: 'Web Worker', ms: Math.round(performance.now() - t0), len: r4.length });
-                  } catch(e) { results.push({ name: 'Web Worker', ms: -1, err: e.message }); }
-                  
-                  // Display results
-                  const fastest = results.filter(r => r.ms >= 0).sort((a, b) => a.ms - b.ms)[0];
-                  let txt = `Blob: ${blob.size} bytes (${mime})\n\n`;
-                  results.forEach(r => {
-                    const flag = r === fastest ? ' ✅ FASTEST' : '';
-                    txt += r.ms >= 0 ? `${r.name}: ${r.ms}ms${flag}\n` : `${r.name}: FAILED (${r.err})\n`;
-                  });
-                  out.textContent = txt;
-                  btn.disabled = false;
-                  btn.textContent = 'Run Again';
-                }} style={{
-                  width: '100%', padding: '10px', fontSize: '12px', fontWeight: '600',
-                  background: '#f0f0f0', border: 'none', borderRadius: '8px', cursor: 'pointer', color: '#333'
-                }}>Run B64 Benchmark</button>
-                <pre id="b64BenchOut" style={{ marginTop: '10px', fontSize: '10px', fontFamily: 'monospace', color: '#666', whiteSpace: 'pre-wrap', minHeight: '20px' }}></pre>
-              </div>
             </SCard>
             
             <SGroup label="About" />
@@ -2772,7 +2679,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
             if (captureGenRef.current !== thisGen) { capLog('↩ Stale CloudSTT result discarded (gen ' + thisGen + ' vs ' + captureGenRef.current + ')'); return; }
             const elapsed = Date.now() - recStartTimeRef.current;
             capLog(`✅ CloudSTT result: "${result.transcript}" (${result.alternatives.length} alts, conf: ${Math.round(result.confidence * 100)}%, elapsed: ${elapsed}ms)`);
-            capLog(`⏱ .then() handler fired at ${elapsed}ms`);
             
             const text = currentLang === 'ja' ? (result.transcript || '').replace(/\s+/g, '') : (result.transcript || '');
             const reading = extractReading(text, result.alternatives, currentLang);
@@ -3534,7 +3440,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.59.0 loaded');
+      console.log('[Kanji Hunt] v2.60.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
