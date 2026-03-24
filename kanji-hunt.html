@@ -551,7 +551,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     };
     
     // Google Cloud Speech-to-Text — fallback for iOS Safari and non-Chrome browsers
-    // Pre-created Worker for STT pipeline (b64 encode + API call) — avoids ~400ms creation overhead per capture
+    // STT Worker code for post-stop pipeline (b64 encode + API call)
     const sttWorkerCode = `
       self.onmessage = async function(e) {
         const t0 = Date.now();
@@ -596,15 +596,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
         } catch(err) { self.postMessage({ error: 'stt-network-error' }); }
       };
     `;
-    let sttWorker = null;
-    try {
-      const wBlob = new Blob([sttWorkerCode], { type: 'application/javascript' });
-      const wUrl = URL.createObjectURL(wBlob);
-      sttWorker = new Worker(wUrl);
-      console.log('[STT] Worker pre-created');
-    } catch(e) {
-      console.warn('[STT] Worker creation failed:', e.message);
-    }
     
     // Cloud STT with silence detection — direct port from v3 test page
     const recognizeWithCloudSTT = (googleKey, lang = 'ja-JP') => {
@@ -690,12 +681,14 @@ Return 1-3 options max. Return ONLY the JSON array.`
             }
             logMsg('⏱ AB wait: ' + waitMs + 'ms (' + chunkBuffers.length + '/' + chunks.length + ' ready)');
             
-            if (!sttWorker) { return reject(new Error('stt-worker-unavailable')); }
+            const wBlob = new Blob([sttWorkerCode], { type: 'application/javascript' });
+            const wUrl = URL.createObjectURL(wBlob);
+            const worker = new Worker(wUrl);
             
             const result = await new Promise((res, rej) => {
-              sttWorker.onmessage = (e) => { res(e.data); };
-              sttWorker.onerror = (err) => { rej(new Error('worker-error')); };
-              sttWorker.postMessage({ chunkBuffers, googleKey, lang, mimeType }, chunkBuffers);
+              worker.onmessage = (e) => { res(e.data); worker.terminate(); URL.revokeObjectURL(wUrl); };
+              worker.onerror = (err) => { rej(new Error('worker-error')); worker.terminate(); URL.revokeObjectURL(wUrl); };
+              worker.postMessage({ chunkBuffers, googleKey, lang, mimeType }, chunkBuffers);
             });
             
             const pipelineMs = Date.now() - pipelineT0;
@@ -827,7 +820,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.56.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.57.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -3592,7 +3585,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.56.0 loaded');
+      console.log('[Kanji Hunt] v2.57.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
