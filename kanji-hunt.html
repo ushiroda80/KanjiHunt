@@ -769,7 +769,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.60.1 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.60.2 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2977,6 +2977,11 @@ Return 1-3 options max. Return ONLY the JSON array.`
             <>
               <div style={{ display: 'flex', gap: '10px', alignItems: 'stretch', width: '100%', maxWidth: '340px' }}>
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  {captureConfidence > 0 && (
+                    <p style={{ marginBottom: '8px', fontSize: '30px', fontWeight: '700', color: captureConfidence > 0.7 ? 'rgba(74,222,128,0.6)' : captureConfidence > 0.4 ? 'rgba(251,191,36,0.6)' : 'rgba(252,165,165,0.6)' }}>
+                      {Math.round(captureConfidence * 100)}%
+                    </p>
+                  )}
                   {editReading && (
                     <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', marginBottom: '6px', letterSpacing: '1px' }}>{editReading}</p>
                   )}
@@ -2987,11 +2992,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
                   <p style={{ marginTop: '6px', fontSize: '13px', color: 'rgba(255,255,255,0.35)', minHeight: '20px' }}>
                     {lookupDef(editValue) || '\u00A0'}
                   </p>
-                  {captureConfidence > 0 && (
-                    <p style={{ marginTop: '4px', fontSize: '10px', color: captureConfidence > 0.7 ? 'rgba(74,222,128,0.6)' : captureConfidence > 0.4 ? 'rgba(251,191,36,0.6)' : 'rgba(252,165,165,0.6)' }}>
-                      {Math.round(captureConfidence * 100)}% confidence
-                    </p>
-                  )}
                 </div>
                 <button onClick={handleEditSubmit} disabled={!editValue.trim()} style={{
                   flex: 'none', width: '64px', background: editValue.trim() ? '#ffe600' : 'rgba(255,255,255,0.05)',
@@ -3449,7 +3449,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.60.1 loaded');
+      console.log('[Kanji Hunt] v2.60.2 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
