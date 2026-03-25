@@ -769,7 +769,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.60.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.60.1 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2463,6 +2463,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       const [editValue, setEditValue] = useState('');
       const [alternatives, setAlternatives] = useState([]);
       const [editReading, setEditReading] = useState('');
+      const [captureConfidence, setCaptureConfidence] = useState(0);
       const [showTipModal, setShowTipModal] = useState(false);
       const [debugLog, setDebugLog] = useState([]);
       const [showDebugLog, setShowDebugLog] = useState(false);
@@ -2577,10 +2578,10 @@ Return 1-3 options max. Return ONLY the JSON array.`
       // Stage 2: Process transcript based on language
       // Both speech methods (webSpeech, cloudSTT) and manual input call this
       const handleRecordingResult = useCallback((result) => {
-        // result: { transcript, alternatives, language, reading? }
-        const { transcript: text, alternatives: alts, language: lang, reading } = result;
+        // result: { transcript, alternatives, language, reading?, confidence? }
+        const { transcript: text, alternatives: alts, language: lang, reading, confidence } = result;
         
-        capLog(`📋 Pipeline: result received — "${text}" (${lang}, ${alts.length} alts)`);
+        capLog(`📋 Pipeline: result received — "${text}" (${lang}, ${alts.length} alts, conf: ${Math.round((confidence || 0) * 100)}%)`);
         
         if (!text) {
           setStatus('error');
@@ -2592,6 +2593,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
         setAlternatives(alts);
         setEditValue(text);
         setEditReading(reading || '');
+        setCaptureConfidence(confidence || 0);
         setStatus('editing');
       }, []);
       
@@ -2688,7 +2690,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
               transcript: text,
               alternatives: result.alternatives,
               language: currentLang,
-              reading
+              reading,
+              confidence: result.confidence
             });
           }).catch(err => {
             clearInterval(countdownId);
@@ -2792,7 +2795,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
               transcript: text,
               alternatives: alts,
               language: langRef.current,
-              reading
+              reading,
+              confidence: current[0].confidence || 0
             });
           }
         };
@@ -2983,6 +2987,11 @@ Return 1-3 options max. Return ONLY the JSON array.`
                   <p style={{ marginTop: '6px', fontSize: '13px', color: 'rgba(255,255,255,0.35)', minHeight: '20px' }}>
                     {lookupDef(editValue) || '\u00A0'}
                   </p>
+                  {captureConfidence > 0 && (
+                    <p style={{ marginTop: '4px', fontSize: '10px', color: captureConfidence > 0.7 ? 'rgba(74,222,128,0.6)' : captureConfidence > 0.4 ? 'rgba(251,191,36,0.6)' : 'rgba(252,165,165,0.6)' }}>
+                      {Math.round(captureConfidence * 100)}% confidence
+                    </p>
+                  )}
                 </div>
                 <button onClick={handleEditSubmit} disabled={!editValue.trim()} style={{
                   flex: 'none', width: '64px', background: editValue.trim() ? '#ffe600' : 'rgba(255,255,255,0.05)',
@@ -3440,7 +3449,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.60.0 loaded');
+      console.log('[Kanji Hunt] v2.60.1 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
