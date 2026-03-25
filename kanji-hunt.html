@@ -36,6 +36,133 @@
 <body>
   <div id="root"></div>
   
+  <script>
+    // ============================================
+    // SPEECH-TO-TEXT (plain JS — no Babel/JSX needed)
+    // Moved out of Babel block for performance on mobile Safari
+    // ============================================
+    
+    // Determine best available speech input method
+    function getSpeechMethod(googleKey) {
+      var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (isIOS) return (typeof MediaRecorder !== 'undefined' && !!googleKey) ? 'cloudSTT' : 'manual';
+      if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) return 'webSpeech';
+      if (typeof MediaRecorder !== 'undefined' && !!googleKey) return 'cloudSTT';
+      return 'manual';
+    }
+    
+    // Google Cloud Speech-to-Text with silence detection
+    // Direct port from v3 test page
+    function recognizeWithCloudSTT(googleKey, lang) {
+      lang = lang || 'ja-JP';
+      var SPEECH_THRESH = 4, SILENCE_THRESH = 2, SILENCE_MS = 800, MIN_SPEECH_MS = 200;
+      var MAX_MS = 5500, SMOOTHING = 0.1, FFT = 512, METER_SCALE = 8;
+      var recording = false, stream = null, recorder = null, audioCtx = null, analyser = null;
+      var rafId = null, chunks = [], speechDetected = false, speechT0 = 0, silenceT0 = 0, captureT0 = 0, stopTimer = null;
+      var ctrl = { stop: null, updateMeter: null, log: null };
+      var logMsg = function(msg) { if (ctrl.log) ctrl.log(msg); };
+      var stopRecording = function(reason) {
+        if (!recording) return;
+        logMsg('⏹ Stop: ' + reason);
+        recording = false;
+        clearTimeout(stopTimer);
+        if (rafId) cancelAnimationFrame(rafId);
+        if (recorder && recorder.state !== 'inactive') recorder.stop();
+      };
+      var monitorLoop = function() {
+        var buf = new Uint8Array(analyser.frequencyBinCount);
+        function tick() {
+          if (!recording) return;
+          analyser.getByteTimeDomainData(buf);
+          var sum = 0;
+          for (var i = 0; i < buf.length; i++) { var v = buf[i] - 128; sum += v * v; }
+          var rms = Math.sqrt(sum / buf.length);
+          var now = Date.now();
+          var elapsed = now - captureT0;
+          if (ctrl.updateMeter) ctrl.updateMeter(Math.min(100, rms * METER_SCALE), speechDetected ? (rms < SILENCE_THRESH ? '#ff3366' : '#ffe600') : 'rgba(255,255,255,0.15)');
+          if (!speechDetected) {
+            if (rms > SPEECH_THRESH) { speechDetected = true; speechT0 = now; silenceT0 = 0; logMsg('🗣 Speech at ' + elapsed + 'ms (RMS: ' + rms.toFixed(1) + ')'); }
+          } else {
+            if (rms < SILENCE_THRESH) {
+              if (!silenceT0) { silenceT0 = now; logMsg('🤫 Silence at ' + elapsed + 'ms (RMS: ' + rms.toFixed(1) + ')'); }
+              var speechDur = (silenceT0 || now) - speechT0, silDur = now - silenceT0;
+              if (silenceT0 && silDur >= SILENCE_MS && speechDur >= MIN_SPEECH_MS) { logMsg('✂️ Auto-stop: ' + silDur + 'ms silence, ' + speechDur + 'ms speech'); stopRecording('silence'); return; }
+            } else { if (silenceT0) logMsg('🗣 Resumed after ' + (now - silenceT0) + 'ms'); silenceT0 = 0; }
+          }
+          rafId = requestAnimationFrame(tick);
+        }
+        tick();
+      };
+      var promise = new Promise(async function(resolve, reject) {
+        if (!googleKey) return reject(new Error('No Google API key'));
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (e) { return reject(new Error('mic-denied')); }
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        logMsg('🔊 AudioCtx: ' + audioCtx.state + ', ' + audioCtx.sampleRate + 'Hz');
+        var source = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = FFT;
+        analyser.smoothingTimeConstant = SMOOTHING;
+        source.connect(analyser);
+        var mimeType = 'audio/webm';
+        var formats = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/wav'];
+        for (var f = 0; f < formats.length; f++) { if (MediaRecorder.isTypeSupported(formats[f])) { mimeType = formats[f]; break; } }
+        recorder = new MediaRecorder(stream, { mimeType: mimeType });
+        var chunkBuffers = [];
+        recorder.ondataavailable = function(e) {
+          if (e.data && e.data.size > 0) {
+            e.data.arrayBuffer().then(function(ab) { chunkBuffers.push(ab); });
+            chunks.push(e.data);
+          }
+        };
+        captureT0 = Date.now();
+        recorder.onstop = async function() {
+          stream.getTracks().forEach(function(t) { t.stop(); });
+          cancelAnimationFrame(rafId);
+          if (audioCtx) { audioCtx.close(); audioCtx = null; }
+          clearTimeout(stopTimer);
+          recording = false;
+          if (chunks.length === 0) return reject(new Error('no-audio'));
+          var recMs = Date.now() - captureT0;
+          var totalSize = chunks.reduce(function(s, c) { return s + c.size; }, 0);
+          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.length + ' pre-converted');
+          var pipelineT0 = Date.now();
+          try {
+            var waitMs = 0;
+            while (chunkBuffers.length < chunks.length && waitMs < 500) {
+              await new Promise(function(r) { setTimeout(r, 10); });
+              waitMs += 10;
+            }
+            logMsg('⏱ AB wait: ' + waitMs + 'ms (' + chunkBuffers.length + '/' + chunks.length + ' ready)');
+            var workerCode = 'self.onmessage=async function(e){var t0=Date.now(),d=e.data,cb=d.chunkBuffers,gk=d.googleKey,ln=d.lang,mt=d.mimeType;try{var tl=0;for(var i=0;i<cb.length;i++)tl+=cb[i].byteLength;var m=new Uint8Array(tl),o=0;for(var i=0;i<cb.length;i++){m.set(new Uint8Array(cb[i]),o);o+=cb[i].byteLength}var C=8192,b="";for(var i=0;i<m.length;i+=C)b+=String.fromCharCode.apply(null,m.subarray(i,i+C));var b64=btoa(b),b64Ms=Date.now()-t0,enc="WEBM_OPUS";if(mt.includes("mp4")||mt.includes("m4a"))enc="ENCODING_UNSPECIFIED";else if(mt.includes("wav"))enc="LINEAR16";else if(mt.includes("ogg"))enc="OGG_OPUS";var ft0=Date.now(),r=await fetch("https://speech.googleapis.com/v1/speech:recognize?key="+gk,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:{encoding:enc,languageCode:ln,maxAlternatives:5,model:"default"},audio:{content:b64}})});if(!r.ok&&enc==="WEBM_OPUS"){r=await fetch("https://speech.googleapis.com/v1/speech:recognize?key="+gk,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:{encoding:"OGG_OPUS",languageCode:ln,maxAlternatives:5},audio:{content:b64}})})}if(!r.ok){self.postMessage({error:"stt-api-error"});return}var data=await r.json(),fMs=Date.now()-ft0,tMs=Date.now()-t0,tr="",al=[],co=0;if(data.results&&data.results.length>0){var a=(data.results[0].alternatives||[]).map(function(x){return{transcript:x.transcript||"",confidence:x.confidence||0}});tr=a[0]?a[0].transcript:"";al=a.slice(0,3);co=a[0]?a[0].confidence:0}self.postMessage({ok:true,transcript:tr,alternatives:al,confidence:co,b64Ms:b64Ms,fetchMs:fMs,totalMs:tMs})}catch(err){self.postMessage({error:"stt-network-error"})}};';
+            var wBlob = new Blob([workerCode], { type: 'application/javascript' });
+            var wUrl = URL.createObjectURL(wBlob);
+            var worker = new Worker(wUrl);
+            var result = await new Promise(function(res, rej) {
+              worker.onmessage = function(e) { res(e.data); worker.terminate(); URL.revokeObjectURL(wUrl); };
+              worker.onerror = function(err) { rej(new Error('worker-error')); worker.terminate(); URL.revokeObjectURL(wUrl); };
+              worker.postMessage({ chunkBuffers: chunkBuffers, googleKey: googleKey, lang: lang, mimeType: mimeType }, chunkBuffers);
+            });
+            var pipelineMs = Date.now() - pipelineT0;
+            if (result.error) { logMsg('❌ Worker: ' + result.error); return reject(new Error(result.error)); }
+            logMsg('⏱ Worker: b64=' + result.b64Ms + 'ms, api=' + result.fetchMs + 'ms, total=' + result.totalMs + 'ms | Pipeline: ' + pipelineMs + 'ms');
+            resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence });
+          } catch(e) { logMsg('❌ Pipeline: ' + e.message); reject(new Error('stt-network-error')); }
+        };
+        recorder.start(1000);
+        recording = true;
+        logMsg('▶️ Recording');
+        stopTimer = setTimeout(function() { if (recording) { logMsg('⏰ Hard cap'); stopRecording('timeout'); } }, MAX_MS);
+        monitorLoop();
+        ctrl.stop = function() { stopRecording('manual'); };
+      });
+      
+      promise.ctrl = ctrl;
+      return promise;
+    }
+  </script>
+  
   <script type="text/babel">
     const { useState, useEffect, useRef, useCallback } = React;
     
@@ -548,142 +675,6 @@ Return 1-3 options max. Return ONLY the JSON array.`
         console.error('[GoogleTTS] Failed:', error);
         return null;
       }
-    };
-    
-    // Google Cloud Speech-to-Text — fallback for iOS Safari and non-Chrome browsers
-    // Cloud STT with silence detection — direct port from v3 test page
-    const recognizeWithCloudSTT = (googleKey, lang = 'ja-JP') => {
-      const SPEECH_THRESH = 4, SILENCE_THRESH = 2, SILENCE_MS = 800, MIN_SPEECH_MS = 200;
-      const MAX_MS = 5500, SMOOTHING = 0.1, FFT = 512, METER_SCALE = 8;
-      let recording = false, stream = null, recorder = null, audioCtx = null, analyser = null;
-      let rafId = null, chunks = [], speechDetected = false, speechT0 = 0, silenceT0 = 0, captureT0 = 0, stopTimer = null;
-      const ctrl = { stop: null, updateMeter: null, log: null };
-      const logMsg = (msg) => { if (ctrl.log) ctrl.log(msg); };
-      const stopRecording = (reason) => {
-        if (!recording) return;
-        logMsg('⏹ Stop: ' + reason);
-        recording = false;
-        clearTimeout(stopTimer);
-        if (rafId) cancelAnimationFrame(rafId);
-        if (recorder?.state !== 'inactive') recorder.stop();
-      };
-      const monitorLoop = () => {
-        const buf = new Uint8Array(analyser.frequencyBinCount);
-        function tick() {
-          if (!recording) return;
-          analyser.getByteTimeDomainData(buf);
-          let sum = 0;
-          for (let i = 0; i < buf.length; i++) { const v = buf[i] - 128; sum += v * v; }
-          const rms = Math.sqrt(sum / buf.length);
-          const now = Date.now();
-          const elapsed = now - captureT0;
-          if (ctrl.updateMeter) ctrl.updateMeter(Math.min(100, rms * METER_SCALE), speechDetected ? (rms < SILENCE_THRESH ? '#ff3366' : '#ffe600') : 'rgba(255,255,255,0.15)');
-          if (!speechDetected) {
-            if (rms > SPEECH_THRESH) { speechDetected = true; speechT0 = now; silenceT0 = 0; logMsg('🗣 Speech at ' + elapsed + 'ms (RMS: ' + rms.toFixed(1) + ')'); }
-          } else {
-            if (rms < SILENCE_THRESH) {
-              if (!silenceT0) { silenceT0 = now; logMsg('🤫 Silence at ' + elapsed + 'ms (RMS: ' + rms.toFixed(1) + ')'); }
-              const speechDur = (silenceT0 || now) - speechT0, silDur = now - silenceT0;
-              if (silenceT0 && silDur >= SILENCE_MS && speechDur >= MIN_SPEECH_MS) { logMsg('✂️ Auto-stop: ' + silDur + 'ms silence, ' + speechDur + 'ms speech'); stopRecording('silence'); return; }
-            } else { if (silenceT0) logMsg('🗣 Resumed after ' + (now - silenceT0) + 'ms'); silenceT0 = 0; }
-          }
-          rafId = requestAnimationFrame(tick);
-        }
-        tick();
-      };
-      const promise = new Promise(async (resolve, reject) => {
-        if (!googleKey) return reject(new Error('No Google API key'));
-        try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (e) { return reject(new Error('mic-denied')); }
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === 'suspended') await audioCtx.resume();
-        logMsg('🔊 AudioCtx: ' + audioCtx.state + ', ' + audioCtx.sampleRate + 'Hz');
-        const source = audioCtx.createMediaStreamSource(stream);
-        analyser = audioCtx.createAnalyser();
-        analyser.fftSize = FFT;
-        analyser.smoothingTimeConstant = SMOOTHING;
-        source.connect(analyser);
-        let mimeType = 'audio/webm';
-        for (const fmt of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/wav']) { if (MediaRecorder.isTypeSupported(fmt)) { mimeType = fmt; break; } }
-        recorder = new MediaRecorder(stream, { mimeType });
-        const chunkBuffers = [];
-        recorder.ondataavailable = (e) => {
-          if (e.data?.size > 0) {
-            e.data.arrayBuffer().then(ab => { chunkBuffers.push(ab); });
-            chunks.push(e.data);
-          }
-        };
-        captureT0 = Date.now();
-        recorder.onstop = async () => {
-          stream.getTracks().forEach(t => t.stop());
-          cancelAnimationFrame(rafId);
-          if (audioCtx) { audioCtx.close(); audioCtx = null; }
-          clearTimeout(stopTimer);
-          recording = false;
-          if (chunks.length === 0) return reject(new Error('no-audio'));
-          const recMs = Date.now() - captureT0;
-          const totalSize = chunks.reduce((s, c) => s + c.size, 0);
-          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.length + ' pre-converted');
-          const pipelineT0 = Date.now();
-          try {
-            let waitMs = 0;
-            while (chunkBuffers.length < chunks.length && waitMs < 500) {
-              await new Promise(r => setTimeout(r, 10));
-              waitMs += 10;
-            }
-            logMsg('⏱ AB wait: ' + waitMs + 'ms (' + chunkBuffers.length + '/' + chunks.length + ' ready)');
-            const workerCode = 'self.onmessage=async function(e){var t0=Date.now(),d=e.data,cb=d.chunkBuffers,gk=d.googleKey,ln=d.lang,mt=d.mimeType;try{var tl=0;for(var i=0;i<cb.length;i++)tl+=cb[i].byteLength;var m=new Uint8Array(tl),o=0;for(var i=0;i<cb.length;i++){m.set(new Uint8Array(cb[i]),o);o+=cb[i].byteLength}var C=8192,b="";for(var i=0;i<m.length;i+=C)b+=String.fromCharCode.apply(null,m.subarray(i,i+C));var b64=btoa(b),b64Ms=Date.now()-t0,enc="WEBM_OPUS";if(mt.includes("mp4")||mt.includes("m4a"))enc="ENCODING_UNSPECIFIED";else if(mt.includes("wav"))enc="LINEAR16";else if(mt.includes("ogg"))enc="OGG_OPUS";var ft0=Date.now(),r=await fetch("https://speech.googleapis.com/v1/speech:recognize?key="+gk,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:{encoding:enc,languageCode:ln,maxAlternatives:5,model:"default"},audio:{content:b64}})});if(!r.ok&&enc==="WEBM_OPUS"){r=await fetch("https://speech.googleapis.com/v1/speech:recognize?key="+gk,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:{encoding:"OGG_OPUS",languageCode:ln,maxAlternatives:5},audio:{content:b64}})})}if(!r.ok){self.postMessage({error:"stt-api-error"});return}var data=await r.json(),fMs=Date.now()-ft0,tMs=Date.now()-t0,tr="",al=[],co=0;if(data.results&&data.results.length>0){var a=(data.results[0].alternatives||[]).map(function(x){return{transcript:x.transcript||"",confidence:x.confidence||0}});tr=a[0]?a[0].transcript:"";al=a.slice(0,3);co=a[0]?a[0].confidence:0}self.postMessage({ok:true,transcript:tr,alternatives:al,confidence:co,b64Ms:b64Ms,fetchMs:fMs,totalMs:tMs})}catch(err){self.postMessage({error:"stt-network-error"})}};';
-            const wBlob = new Blob([workerCode], { type: 'application/javascript' });
-            const wUrl = URL.createObjectURL(wBlob);
-            const worker = new Worker(wUrl);
-            const result = await new Promise((res, rej) => {
-              worker.onmessage = (e) => { res(e.data); worker.terminate(); URL.revokeObjectURL(wUrl); };
-              worker.onerror = (err) => { rej(new Error('worker-error')); worker.terminate(); URL.revokeObjectURL(wUrl); };
-              worker.postMessage({ chunkBuffers, googleKey, lang, mimeType }, chunkBuffers);
-            });
-            const pipelineMs = Date.now() - pipelineT0;
-            if (result.error) { logMsg('❌ Worker: ' + result.error); return reject(new Error(result.error)); }
-            logMsg('⏱ Worker: b64=' + result.b64Ms + 'ms, api=' + result.fetchMs + 'ms, total=' + result.totalMs + 'ms | Pipeline: ' + pipelineMs + 'ms');
-            resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence });
-          } catch(e) { logMsg('❌ Pipeline: ' + e.message); reject(new Error('stt-network-error')); }
-        };
-        recorder.start(1000);
-        recording = true;
-        logMsg('▶️ Recording');
-        stopTimer = setTimeout(() => { if (recording) { logMsg('⏰ Hard cap'); stopRecording('timeout'); } }, MAX_MS);
-        monitorLoop();
-        ctrl.stop = () => stopRecording('manual');
-      });
-      
-      promise.ctrl = ctrl;
-      return promise;
-    };
-    
-    // Parse Google Cloud STT response into our standard format
-    const parseSTTResults = (data) => {
-      if (!data.results || data.results.length === 0) {
-        return { transcript: '', alternatives: [], confidence: 0 };
-      }
-      const result = data.results[0];
-      const alts = (result.alternatives || []).map(a => ({
-        transcript: a.transcript || '',
-        confidence: a.confidence || 0,
-      }));
-      return {
-        transcript: alts[0]?.transcript || '',
-        alternatives: alts.slice(0, 3),
-        confidence: alts[0]?.confidence || 0,
-      };
-    };
-    
-    // Determine best available speech input method
-    const getSpeechMethod = (googleKey) => {
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
-        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-      // iOS has webkitSpeechRecognition in window but it doesn't actually work
-      if (isIOS) return (typeof MediaRecorder !== 'undefined' && !!googleKey) ? 'cloudSTT' : 'manual';
-      if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) return 'webSpeech';
-      if (typeof MediaRecorder !== 'undefined' && !!googleKey) return 'cloudSTT';
-      return 'manual';
     };
     
     // Estimate per-mora timing from total audio duration
