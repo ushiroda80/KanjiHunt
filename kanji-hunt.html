@@ -114,15 +114,16 @@
         for (var f = 0; f < formats.length; f++) { if (MediaRecorder.isTypeSupported(formats[f])) { mimeType = formats[f]; break; } }
         recorder = new MediaRecorder(stream, { mimeType: mimeType });
         var chunkBuffers = [];
-        
+        var chunkPromises = [];
         // Create Worker at recording start (warm, not stale)
         var worker = new Worker(sttWorkerUrl);
         logMsg('🔧 Worker created at recording start');
         
         recorder.ondataavailable = function(e) {
           if (e.data && e.data.size > 0) {
-            e.data.arrayBuffer().then(function(ab) { chunkBuffers.push(ab); });
+            var idx = chunks.length;
             chunks.push(e.data);
+            chunkPromises.push(e.data.arrayBuffer().then(function(ab) { chunkBuffers[idx] = ab; return ab; }));
           }
         };
         captureT0 = Date.now();
@@ -137,22 +138,19 @@
           var recMs = Date.now() - captureT0;
           var totalSize = chunks.reduce(function(s, c) { return s + c.size; }, 0);
           var cleanupMs = Date.now() - onstopT0;
-          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.length + ' pre-converted (cleanup: ' + cleanupMs + 'ms)');
+          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.filter(Boolean).length + ' pre-converted (cleanup: ' + cleanupMs + 'ms)');
           var pipelineT0 = Date.now();
           try {
-            var waitMs = 0;
-            while (chunkBuffers.length < chunks.length && waitMs < 500) {
-              await new Promise(function(r) { setTimeout(r, 10); });
-              waitMs += 10;
-            }
+            await Promise.all(chunkPromises);
             var abWaitReal = Date.now() - pipelineT0;
-            logMsg('⏱ AB wait: ' + waitMs + 'ms poll, ' + abWaitReal + 'ms real (' + chunkBuffers.length + '/' + chunks.length + ' ready)');
+            var readyBuffers = chunkBuffers.filter(Boolean);
+            logMsg('⏱ AB wait: ' + abWaitReal + 'ms (' + readyBuffers.length + '/' + chunks.length + ' ready)');
             // Worker already alive — just postMessage (no Blob/URL/Worker creation here)
             var postT0 = Date.now();
             var result = await new Promise(function(res, rej) {
               worker.onmessage = function(e) { res(e.data); worker.terminate(); };
               worker.onerror = function(err) { rej(new Error('worker-error')); worker.terminate(); };
-              worker.postMessage({ chunkBuffers: chunkBuffers, googleKey: googleKey, lang: lang, mimeType: mimeType }, chunkBuffers);
+              worker.postMessage({ chunkBuffers: readyBuffers, googleKey: googleKey, lang: lang, mimeType: mimeType }, readyBuffers);
             });
             var pipelineMs = Date.now() - pipelineT0;
             var postMs = Date.now() - postT0;
@@ -771,7 +769,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.64.1 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.65.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
