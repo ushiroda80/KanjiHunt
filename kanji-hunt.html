@@ -127,6 +127,7 @@
         };
         captureT0 = Date.now();
         recorder.onstop = async function() {
+          var onstopT0 = Date.now();
           stream.getTracks().forEach(function(t) { t.stop(); });
           cancelAnimationFrame(rafId);
           if (audioCtx) { audioCtx.close(); audioCtx = null; }
@@ -135,7 +136,8 @@
           if (chunks.length === 0) { worker.terminate(); return reject(new Error('no-audio')); }
           var recMs = Date.now() - captureT0;
           var totalSize = chunks.reduce(function(s, c) { return s + c.size; }, 0);
-          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.length + ' pre-converted');
+          var cleanupMs = Date.now() - onstopT0;
+          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.length + ' pre-converted (cleanup: ' + cleanupMs + 'ms)');
           var pipelineT0 = Date.now();
           try {
             var waitMs = 0;
@@ -143,7 +145,8 @@
               await new Promise(function(r) { setTimeout(r, 10); });
               waitMs += 10;
             }
-            logMsg('⏱ AB wait: ' + waitMs + 'ms (' + chunkBuffers.length + '/' + chunks.length + ' ready)');
+            var abWaitReal = Date.now() - pipelineT0;
+            logMsg('⏱ AB wait: ' + waitMs + 'ms poll, ' + abWaitReal + 'ms real (' + chunkBuffers.length + '/' + chunks.length + ' ready)');
             // Worker already alive — just postMessage (no Blob/URL/Worker creation here)
             var postT0 = Date.now();
             var result = await new Promise(function(res, rej) {
@@ -768,7 +771,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.63.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.64.1 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -2456,7 +2459,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       const [timeLeft, setTimeLeft] = useState(7);
       const [transcript, setTranscript] = useState('');
       const [manualInput, setManualInput] = useState('');
-      const [captureLang, setCaptureLang] = useState(defaultLang);
+      const [captureLang, setCaptureLang] = useState(() => getStoredDefaultLang());
       const [resolving, setResolving] = useState(false);
       const [candidates, setCandidates] = useState([]);
       const [editValue, setEditValue] = useState('');
@@ -2556,8 +2559,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       const activeTimersRef = useRef({ timeout: null, countdown: null });
       const captureGenRef = useRef(0);
       
-      useEffect(() => { setCaptureLang(defaultLang); }, [defaultLang]);
-      
+
       const isJaMode = captureLang === 'ja';
       
       const stopCurrentRecognition = () => {
