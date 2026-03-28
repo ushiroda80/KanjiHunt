@@ -60,7 +60,7 @@
     // Direct port from v3 test page
     function recognizeWithCloudSTT(googleKey, lang) {
       lang = lang || 'ja-JP';
-      var SPEECH_THRESH = 4, SILENCE_THRESH = 2, SILENCE_MS = 800, MIN_SPEECH_MS = 200;
+      var SPEECH_THRESH = 4, SILENCE_THRESH = 2, SILENCE_MS = 650, MIN_SPEECH_MS = 200;
       var MAX_MS = 5500, SMOOTHING = 0.1, FFT = 512, METER_SCALE = 8;
       var recording = false, cancelled = false, stream = null, recorder = null, audioCtx = null, analyser = null;
       var rafId = null, chunks = [], speechDetected = false, speechT0 = 0, silenceT0 = 0, captureT0 = 0, stopTimer = null;
