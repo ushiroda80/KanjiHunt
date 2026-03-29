@@ -88,25 +88,12 @@
       return 'manual';
     }
     
-    // Base64 encode ArrayBuffers on main thread (fast — ~3-7ms for typical audio)
-    function encodeBuffersToBase64(chunkBuffers) {
-      var totalLen = 0;
-      for (var i = 0; i < chunkBuffers.length; i++) totalLen += chunkBuffers[i].byteLength;
-      var merged = new Uint8Array(totalLen);
-      var offset = 0;
-      for (var i = 0; i < chunkBuffers.length; i++) {
-        merged.set(new Uint8Array(chunkBuffers[i]), offset);
-        offset += chunkBuffers[i].byteLength;
-      }
-      var CHUNK_SIZE = 8192;
-      var binary = '';
-      for (var i = 0; i < merged.length; i += CHUNK_SIZE) {
-        binary += String.fromCharCode.apply(null, merged.subarray(i, i + CHUNK_SIZE));
-      }
-      return btoa(binary);
-    }
+    // STT Worker code — does b64 encode + Cloud Function fetch off main thread
+    // Auth token passed in via postMessage (short-lived, standard pattern)
+    var sttWorkerCode = 'self.onmessage=async function(e){var t0=Date.now(),d=e.data,cb=d.chunkBuffers,token=d.authToken,cfUrl=d.cfUrl,ln=d.lang,mt=d.mimeType;try{var tl=0;for(var i=0;i<cb.length;i++)tl+=cb[i].byteLength;var m=new Uint8Array(tl),o=0;for(var i=0;i<cb.length;i++){m.set(new Uint8Array(cb[i]),o);o+=cb[i].byteLength}var C=8192,b="";for(var i=0;i<m.length;i+=C)b+=String.fromCharCode.apply(null,m.subarray(i,i+C));var b64=btoa(b),b64Ms=Date.now()-t0;var ft0=Date.now(),r=await fetch(cfUrl,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({audioBase64:b64,lang:ln,mimeType:mt})});if(!r.ok){self.postMessage({error:"stt-api-error"});return}var data=await r.json(),fMs=Date.now()-ft0,tMs=Date.now()-t0;var tr=data.transcript||"",al=data.alternatives||[],co=data.confidence||0;self.postMessage({ok:true,transcript:tr,alternatives:al,confidence:co,b64Ms:b64Ms,fetchMs:fMs,totalMs:tMs})}catch(err){self.postMessage({error:"stt-network-error"})}};';
+    var sttWorkerUrl = URL.createObjectURL(new Blob([sttWorkerCode], { type: 'application/javascript' }));
     
-    // Google Cloud Speech-to-Text via Cloud Function (no Worker)
+    // Google Cloud Speech-to-Text via Worker + Cloud Function
     function recognizeWithCloudSTT(lang) {
       lang = lang || 'ja-JP';
       var SPEECH_THRESH = 4, SILENCE_THRESH = 2, SILENCE_MS = 650, MIN_SPEECH_MS = 200;
@@ -165,6 +152,9 @@
         recorder = new MediaRecorder(stream, { mimeType: mimeType });
         var chunkBuffers = [];
         var chunkPromises = [];
+        // Create Worker at recording start (warm, not stale)
+        var worker = new Worker(sttWorkerUrl);
+        logMsg('🔧 Worker created at recording start');
         
         recorder.ondataavailable = function(e) {
           if (e.data && e.data.size > 0) {
@@ -181,8 +171,8 @@
           if (audioCtx) { audioCtx.close(); audioCtx = null; }
           clearTimeout(stopTimer);
           recording = false;
-          if (cancelled) { logMsg('↩ onstop: cancelled (user switched to manual)'); return; }
-          if (chunks.length === 0) { return reject(new Error('no-audio')); }
+          if (cancelled) { logMsg('↩ onstop: cancelled (user switched to manual)'); worker.terminate(); return; }
+          if (chunks.length === 0) { worker.terminate(); return reject(new Error('no-audio')); }
           var recMs = Date.now() - captureT0;
           var totalSize = chunks.reduce(function(s, c) { return s + c.size; }, 0);
           var cleanupMs = Date.now() - onstopT0;
@@ -193,35 +183,19 @@
             var abWaitReal = Date.now() - pipelineT0;
             var readyBuffers = chunkBuffers.filter(Boolean);
             logMsg('⏱ AB wait: ' + abWaitReal + 'ms (' + readyBuffers.length + '/' + chunks.length + ' ready)');
-            
-            // Encode to base64 on main thread (fast since buffers are pre-converted)
-            var b64T0 = Date.now();
-            var audioBase64 = encodeBuffersToBase64(readyBuffers);
-            var b64Ms = Date.now() - b64T0;
-            logMsg('⏱ B64 encode: ' + b64Ms + 'ms (' + audioBase64.length + ' chars)');
-            
-            // Get auth token and call Cloud Function
+            // Get auth token on main thread (needs Firebase SDK), then hand off to Worker
             var token = await getAuthToken();
-            var fetchT0 = Date.now();
-            var r = await fetch(CF_URLS.recognizeSpeech, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-              body: JSON.stringify({ audioBase64: audioBase64, lang: lang, mimeType: mimeType })
+            var postT0 = Date.now();
+            var result = await new Promise(function(res, rej) {
+              worker.onmessage = function(e) { res(e.data); worker.terminate(); };
+              worker.onerror = function(err) { rej(new Error('worker-error')); worker.terminate(); };
+              worker.postMessage({ chunkBuffers: readyBuffers, authToken: token, cfUrl: CF_URLS.recognizeSpeech, lang: lang, mimeType: mimeType }, readyBuffers);
             });
-            var fetchMs = Date.now() - fetchT0;
-            if (!r.ok) {
-              var errText = await r.text();
-              logMsg('❌ STT API error: ' + r.status + ' ' + errText.slice(0, 100));
-              return reject(new Error('stt-api-error'));
-            }
-            var data = await r.json();
             var pipelineMs = Date.now() - pipelineT0;
-            // Cloud Function already parses the STT result into { transcript, alternatives, confidence }
-            var tr = data.transcript || '';
-            var al = data.alternatives || [];
-            var co = data.confidence || 0;
-            logMsg('⏱ Pipeline: b64=' + b64Ms + 'ms, api=' + fetchMs + 'ms, total=' + pipelineMs + 'ms');
-            resolve({ transcript: tr, alternatives: al, confidence: co, timing: { captureMs: recMs, onstopMs: cleanupMs, packMs: pipelineMs - fetchMs, apiMs: fetchMs } });
+            var postMs = Date.now() - postT0;
+            if (result.error) { logMsg('❌ Worker: ' + result.error); return reject(new Error(result.error)); }
+            logMsg('⏱ Worker: b64=' + result.b64Ms + 'ms, api=' + result.fetchMs + 'ms, total=' + result.totalMs + 'ms | Post: ' + postMs + 'ms | Pipeline: ' + pipelineMs + 'ms');
+            resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence, timing: { captureMs: recMs, onstopMs: cleanupMs, packMs: pipelineMs - result.fetchMs, apiMs: result.fetchMs } });
           } catch(e) { logMsg('❌ Pipeline: ' + e.message); reject(new Error('stt-network-error')); }
         };
         recorder.start(1000);
@@ -776,7 +750,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.0.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.0.1 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -3480,7 +3454,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v3.0.0 loaded');
+      console.log('[Kanji Hunt] v3.0.1 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
