@@ -152,6 +152,7 @@
         recorder = new MediaRecorder(stream, { mimeType: mimeType });
         var chunkBuffers = [];
         var chunkPromises = [];
+        var chunkMeta = [];
         // Create Worker at recording start (warm, not stale)
         var worker = new Worker(sttWorkerUrl);
         logMsg('🔧 Worker created at recording start');
@@ -159,13 +160,22 @@
         recorder.ondataavailable = function(e) {
           if (e.data && e.data.size > 0) {
             var idx = chunks.length;
+            var arrivedAt = Date.now() - captureT0;
+            var size = e.data.size;
             chunks.push(e.data);
-            chunkPromises.push(e.data.arrayBuffer().then(function(ab) { chunkBuffers[idx] = ab; return ab; }));
+            var abStart = Date.now();
+            chunkPromises.push(e.data.arrayBuffer().then(function(ab) {
+              var abDone = Date.now();
+              chunkMeta[idx] = { arrivedAt: arrivedAt, size: size, abMs: abDone - abStart, doneAt: abDone - captureT0 };
+              chunkBuffers[idx] = ab;
+              return ab;
+            }));
           }
         };
         captureT0 = Date.now();
         recorder.onstop = async function() {
           var onstopT0 = Date.now();
+          var onstopElapsed = onstopT0 - captureT0;
           stream.getTracks().forEach(function(t) { t.stop(); });
           cancelAnimationFrame(rafId);
           if (audioCtx) { audioCtx.close(); audioCtx = null; }
@@ -176,12 +186,21 @@
           var recMs = Date.now() - captureT0;
           var totalSize = chunks.reduce(function(s, c) { return s + c.size; }, 0);
           var cleanupMs = Date.now() - onstopT0;
-          logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.filter(Boolean).length + ' pre-converted (cleanup: ' + cleanupMs + 'ms)');
+          var readyAtStop = chunkBuffers.filter(Boolean).length;
+          logMsg('🔴 Stopped at ' + onstopElapsed + 'ms. ' + totalSize + 'b, ' + chunks.length + ' chunks, ' + readyAtStop + '/' + chunks.length + ' pre-converted (cleanup: ' + cleanupMs + 'ms)');
           var pipelineT0 = Date.now();
           try {
             await Promise.all(chunkPromises);
             var abWaitReal = Date.now() - pipelineT0;
             var readyBuffers = chunkBuffers.filter(Boolean);
+            // Log per-chunk breakdown
+            for (var ci = 0; ci < chunkMeta.length; ci++) {
+              var cm = chunkMeta[ci];
+              if (cm) {
+                var pending = cm.doneAt > onstopElapsed;
+                logMsg('  📦 Chunk ' + ci + ': ' + Math.round(cm.size/1024) + 'KB, arrived ' + cm.arrivedAt + 'ms, ab=' + cm.abMs + 'ms' + (pending ? ' ⚠️ finished ' + Math.round(cm.doneAt - onstopElapsed) + 'ms AFTER stop' : ' ✓ ready before stop'));
+              }
+            }
             logMsg('⏱ AB wait: ' + abWaitReal + 'ms (' + readyBuffers.length + '/' + chunks.length + ' ready)');
             // Get auth token on main thread (needs Firebase SDK), then hand off to Worker
             var token = await getAuthToken();
