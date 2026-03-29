@@ -10,6 +10,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Kanji Hunt">
   <link rel="apple-touch-icon" href="icon-512.svg">
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -38,27 +40,74 @@
   
   <script>
     // ============================================
+    // FIREBASE INIT
+    // ============================================
+    
+    var firebaseConfig = {
+      apiKey: "AIzaSyAONlO5vAGAZb3zux6iQGORuksnqsJ7PKc",
+      authDomain: "kanji-hunt.firebaseapp.com",
+      projectId: "kanji-hunt",
+      storageBucket: "kanji-hunt.firebasestorage.app",
+      messagingSenderId: "443591225699",
+      appId: "1:443591225699:web:91ec7ef21a6f33c6506356"
+    };
+    firebase.initializeApp(firebaseConfig);
+    var firebaseAuth = firebase.auth();
+    
+    // Cloud Function base URLs (asia-northeast1)
+    var CF_URLS = {
+      fetchCoreData: 'https://fetchcoredata-paobljo2bq-an.a.run.app',
+      fetchPitchAndSentences: 'https://fetchpitchandsentences-paobljo2bq-an.a.run.app',
+      fetchKanjiDetails: 'https://fetchkanjidetails-paobljo2bq-an.a.run.app',
+      resolveEnglish: 'https://resolveenglish-paobljo2bq-an.a.run.app',
+      recognizeSpeech: 'https://recognizespeech-paobljo2bq-an.a.run.app',
+      synthesizeSpeech: 'https://synthesizespeech-paobljo2bq-an.a.run.app',
+      getUsage: 'https://getusage-paobljo2bq-an.a.run.app'
+    };
+    
+    // Get fresh auth token (auto-refreshes if expired)
+    async function getAuthToken() {
+      var user = firebaseAuth.currentUser;
+      if (!user) throw new Error('not-signed-in');
+      return await user.getIdToken();
+    }
+    
+    // ============================================
     // SPEECH-TO-TEXT (plain JS — no Babel/JSX needed)
     // Moved out of Babel block for performance on mobile Safari
     // ============================================
     
     // Determine best available speech input method
-    function getSpeechMethod(googleKey) {
+    function getSpeechMethod() {
+      var user = firebaseAuth.currentUser;
       var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-      if (isIOS) return (typeof MediaRecorder !== 'undefined' && !!googleKey) ? 'cloudSTT' : 'manual';
+      if (isIOS) return (typeof MediaRecorder !== 'undefined' && !!user) ? 'cloudSTT' : 'manual';
       if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) return 'webSpeech';
-      if (typeof MediaRecorder !== 'undefined' && !!googleKey) return 'cloudSTT';
+      if (typeof MediaRecorder !== 'undefined' && !!user) return 'cloudSTT';
       return 'manual';
     }
     
-    // Pre-create Worker URL at page load (once, reused across all captures)
-    var sttWorkerCode = 'self.onmessage=async function(e){var t0=Date.now(),d=e.data,cb=d.chunkBuffers,gk=d.googleKey,ln=d.lang,mt=d.mimeType;try{var tl=0;for(var i=0;i<cb.length;i++)tl+=cb[i].byteLength;var m=new Uint8Array(tl),o=0;for(var i=0;i<cb.length;i++){m.set(new Uint8Array(cb[i]),o);o+=cb[i].byteLength}var C=8192,b="";for(var i=0;i<m.length;i+=C)b+=String.fromCharCode.apply(null,m.subarray(i,i+C));var b64=btoa(b),b64Ms=Date.now()-t0,enc="WEBM_OPUS";if(mt.includes("mp4")||mt.includes("m4a"))enc="ENCODING_UNSPECIFIED";else if(mt.includes("wav"))enc="LINEAR16";else if(mt.includes("ogg"))enc="OGG_OPUS";var ft0=Date.now(),r=await fetch("https://speech.googleapis.com/v1/speech:recognize?key="+gk,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:{encoding:enc,languageCode:ln,maxAlternatives:5,model:"default"},audio:{content:b64}})});if(!r.ok&&enc==="WEBM_OPUS"){r=await fetch("https://speech.googleapis.com/v1/speech:recognize?key="+gk,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({config:{encoding:"OGG_OPUS",languageCode:ln,maxAlternatives:5},audio:{content:b64}})})}if(!r.ok){self.postMessage({error:"stt-api-error"});return}var data=await r.json(),fMs=Date.now()-ft0,tMs=Date.now()-t0,tr="",al=[],co=0;if(data.results&&data.results.length>0){var a=(data.results[0].alternatives||[]).map(function(x){return{transcript:x.transcript||"",confidence:x.confidence||0}});tr=a[0]?a[0].transcript:"";al=a.slice(0,3);co=a[0]?a[0].confidence:0}self.postMessage({ok:true,transcript:tr,alternatives:al,confidence:co,b64Ms:b64Ms,fetchMs:fMs,totalMs:tMs})}catch(err){self.postMessage({error:"stt-network-error"})}};';
-    var sttWorkerUrl = URL.createObjectURL(new Blob([sttWorkerCode], { type: 'application/javascript' }));
+    // Base64 encode ArrayBuffers on main thread (fast — ~3-7ms for typical audio)
+    function encodeBuffersToBase64(chunkBuffers) {
+      var totalLen = 0;
+      for (var i = 0; i < chunkBuffers.length; i++) totalLen += chunkBuffers[i].byteLength;
+      var merged = new Uint8Array(totalLen);
+      var offset = 0;
+      for (var i = 0; i < chunkBuffers.length; i++) {
+        merged.set(new Uint8Array(chunkBuffers[i]), offset);
+        offset += chunkBuffers[i].byteLength;
+      }
+      var CHUNK_SIZE = 8192;
+      var binary = '';
+      for (var i = 0; i < merged.length; i += CHUNK_SIZE) {
+        binary += String.fromCharCode.apply(null, merged.subarray(i, i + CHUNK_SIZE));
+      }
+      return btoa(binary);
+    }
     
-    // Google Cloud Speech-to-Text with silence detection
-    // Direct port from v3 test page
-    function recognizeWithCloudSTT(googleKey, lang) {
+    // Google Cloud Speech-to-Text via Cloud Function (no Worker)
+    function recognizeWithCloudSTT(lang) {
       lang = lang || 'ja-JP';
       var SPEECH_THRESH = 4, SILENCE_THRESH = 2, SILENCE_MS = 650, MIN_SPEECH_MS = 200;
       var MAX_MS = 5500, SMOOTHING = 0.1, FFT = 512, METER_SCALE = 8;
@@ -99,7 +148,8 @@
         tick();
       };
       var promise = new Promise(async function(resolve, reject) {
-        if (!googleKey) return reject(new Error('No Google API key'));
+        var user = firebaseAuth.currentUser;
+        if (!user) return reject(new Error('not-signed-in'));
         try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (e) { return reject(new Error('mic-denied')); }
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -115,9 +165,6 @@
         recorder = new MediaRecorder(stream, { mimeType: mimeType });
         var chunkBuffers = [];
         var chunkPromises = [];
-        // Create Worker at recording start (warm, not stale)
-        var worker = new Worker(sttWorkerUrl);
-        logMsg('🔧 Worker created at recording start');
         
         recorder.ondataavailable = function(e) {
           if (e.data && e.data.size > 0) {
@@ -134,8 +181,8 @@
           if (audioCtx) { audioCtx.close(); audioCtx = null; }
           clearTimeout(stopTimer);
           recording = false;
-          if (cancelled) { logMsg('↩ onstop: cancelled (user switched to manual)'); worker.terminate(); return; }
-          if (chunks.length === 0) { worker.terminate(); return reject(new Error('no-audio')); }
+          if (cancelled) { logMsg('↩ onstop: cancelled (user switched to manual)'); return; }
+          if (chunks.length === 0) { return reject(new Error('no-audio')); }
           var recMs = Date.now() - captureT0;
           var totalSize = chunks.reduce(function(s, c) { return s + c.size; }, 0);
           var cleanupMs = Date.now() - onstopT0;
@@ -146,18 +193,38 @@
             var abWaitReal = Date.now() - pipelineT0;
             var readyBuffers = chunkBuffers.filter(Boolean);
             logMsg('⏱ AB wait: ' + abWaitReal + 'ms (' + readyBuffers.length + '/' + chunks.length + ' ready)');
-            // Worker already alive — just postMessage (no Blob/URL/Worker creation here)
-            var postT0 = Date.now();
-            var result = await new Promise(function(res, rej) {
-              worker.onmessage = function(e) { res(e.data); worker.terminate(); };
-              worker.onerror = function(err) { rej(new Error('worker-error')); worker.terminate(); };
-              worker.postMessage({ chunkBuffers: readyBuffers, googleKey: googleKey, lang: lang, mimeType: mimeType }, readyBuffers);
+            
+            // Encode to base64 on main thread (fast since buffers are pre-converted)
+            var b64T0 = Date.now();
+            var audioBase64 = encodeBuffersToBase64(readyBuffers);
+            var b64Ms = Date.now() - b64T0;
+            logMsg('⏱ B64 encode: ' + b64Ms + 'ms (' + audioBase64.length + ' chars)');
+            
+            // Get auth token and call Cloud Function
+            var token = await getAuthToken();
+            var fetchT0 = Date.now();
+            var r = await fetch(CF_URLS.recognizeSpeech, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+              body: JSON.stringify({ audioBase64: audioBase64, lang: lang, mimeType: mimeType })
             });
+            var fetchMs = Date.now() - fetchT0;
+            if (!r.ok) {
+              var errText = await r.text();
+              logMsg('❌ STT API error: ' + r.status + ' ' + errText.slice(0, 100));
+              return reject(new Error('stt-api-error'));
+            }
+            var data = await r.json();
             var pipelineMs = Date.now() - pipelineT0;
-            var postMs = Date.now() - postT0;
-            if (result.error) { logMsg('❌ Worker: ' + result.error); return reject(new Error(result.error)); }
-            logMsg('⏱ Worker: b64=' + result.b64Ms + 'ms, api=' + result.fetchMs + 'ms, total=' + result.totalMs + 'ms | Post: ' + postMs + 'ms | Pipeline: ' + pipelineMs + 'ms');
-            resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence, timing: { captureMs: recMs, onstopMs: cleanupMs, packMs: pipelineMs - result.fetchMs, apiMs: result.fetchMs } });
+            var tr = '', al = [], co = 0;
+            if (data.results && data.results.length > 0) {
+              var a = (data.results[0].alternatives || []).map(function(x) { return { transcript: x.transcript || '', confidence: x.confidence || 0 }; });
+              tr = a[0] ? a[0].transcript : '';
+              al = a.slice(0, 3);
+              co = a[0] ? a[0].confidence : 0;
+            }
+            logMsg('⏱ Pipeline: b64=' + b64Ms + 'ms, api=' + fetchMs + 'ms, total=' + pipelineMs + 'ms');
+            resolve({ transcript: tr, alternatives: al, confidence: co, timing: { captureMs: recMs, onstopMs: cleanupMs, packMs: pipelineMs - fetchMs, apiMs: fetchMs } });
           } catch(e) { logMsg('❌ Pipeline: ' + e.message); reject(new Error('stt-network-error')); }
         };
         recorder.start(1000);
@@ -181,17 +248,9 @@
     // API CONFIGURATION
     // ============================================
     
-    // Store API key in localStorage
-    const getStoredAPIKey = () => localStorage.getItem('wordHunter_apiKey') || '';
-    const setStoredAPIKey = (key) => localStorage.setItem('wordHunter_apiKey', key);
-    
     // Store default capture language preference
     const getStoredDefaultLang = () => localStorage.getItem('wordHunter_defaultLang') || 'ja';
     const setStoredDefaultLang = (lang) => localStorage.setItem('wordHunter_defaultLang', lang);
-    
-    // Store Google Cloud TTS API key
-    const getStoredGoogleTTSKey = () => localStorage.getItem('wordHunter_googleTTSKey') || '';
-    const setStoredGoogleTTSKey = (key) => localStorage.setItem('wordHunter_googleTTSKey', key);
     
     // ============================================
     // KANJIUM PITCH ACCENT DATABASE
@@ -459,34 +518,24 @@ Return 1-3 options max. Return ONLY the JSON array.`
     };
 
     // ============================================
-    // API HELPERS
+    // API HELPERS — Cloud Function proxy
     // ============================================
     
-    const ANTHROPIC_HEADERS = (apiKey) => ({
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    });
-    
-    const callAnthropic = async (apiKey, model, maxTokens, prompt) => {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const callCloudFunction = async (functionName, params) => {
+      const token = await getAuthToken();
+      const response = await fetch(CF_URLS[functionName], {
         method: 'POST',
-        headers: ANTHROPIC_HEADERS(apiKey),
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens,
-          messages: [{ role: 'user', content: prompt }]
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(params)
       });
       if (!response.ok) {
         const errorBody = await response.text();
-        throw new Error(`API error ${response.status}: ${errorBody.slice(0, 200)}`);
+        throw new Error(`CF ${functionName} error ${response.status}: ${errorBody.slice(0, 200)}`);
       }
-      const data = await response.json();
-      let raw = data.content[0].text.trim();
-      raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-      return JSON.parse(raw);
+      return await response.json();
     };
 
     // ============================================
@@ -494,16 +543,15 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     // Phase 1: Quick fetch — kanji, reading, definition, context (small, fast response)
-    const fetchCoreData = async (word, apiKey, sourceContext) => {
-      if (!apiKey) { console.warn('[fetchCoreData] No API key'); return null; }
+    const fetchCoreData = async (word, sourceContext) => {
       try {
         const isSingleKanji = [...word].length === 1 && /[\u4e00-\u9faf]/.test(word);
         const contextHint = isSingleKanji && sourceContext
           ? PROMPTS.singleKanjiWithContext(sourceContext)
           : isSingleKanji ? PROMPTS.singleKanjiAlone : '';
         
-        console.log('[fetchCoreData] Calling API for:', word, sourceContext ? '(from: ' + sourceContext + ')' : '');
-        const parsed = await callAnthropic(apiKey, 'claude-sonnet-4-20250514', 1000, PROMPTS.coreData(word, contextHint));
+        console.log('[fetchCoreData] Calling Cloud Function for:', word, sourceContext ? '(from: ' + sourceContext + ')' : '');
+        const parsed = await callCloudFunction('fetchCoreData', { word, contextHint });
         console.log('[fetchCoreData] Parsed result:', parsed);
         return parsed;
       } catch (error) {
@@ -512,11 +560,9 @@ Return 1-3 options max. Return ONLY the JSON array.`
       }
     };
     
-    // Phase 2a: Sonnet — pitch accent + example sentences
-    const fetchPitchAndSentences = async (word, apiKey, skipPitch = false, jlpt = null, definitions = []) => {
-      if (!apiKey) return null;
+    // Phase 2a: Pitch accent + example sentences
+    const fetchPitchAndSentences = async (word, skipPitch = false, jlpt = null, definitions = []) => {
       const level = jlpt || 'N3';
-      // Sentence context should be one level easier so learner focuses on the target word
       const sentenceLevel = { 'N1': 'N2', 'N2': 'N3', 'N3': 'N4', 'N4': 'N5', 'N5': 'N5' }[level] || 'N4';
       const defMeanings = definitions.map(d => d.meaning).filter(Boolean);
       const defHint = defMeanings.length > 1
@@ -525,17 +571,17 @@ Return 1-3 options max. Return ONLY the JSON array.`
         ? `\nThis word means "${defMeanings[0]}". Provide 3 example sentences. Set "defMeaning" to "${defMeanings[0]}" for all.`
         : '\nProvide 3 example sentences. Set "defMeaning" to a short English meaning for each.';
       try {
-        return await callAnthropic(apiKey, 'claude-sonnet-4-20250514', 2000, PROMPTS.pitchAndSentences(word, skipPitch, sentenceLevel, defHint));
+        return await callCloudFunction('fetchPitchAndSentences', { word, skipPitch, sentenceLevel, defHint });
       } catch (error) {
         console.error('[fetchPitchAndSentences] FAILED:', error);
         return null;
       }
     };
 
-    // Phase 2b: Haiku — kanji details
-    const fetchKanjiDetails = async (word, apiKey) => {
+    // Phase 2b: Kanji details
+    const fetchKanjiDetails = async (word) => {
       try {
-        const parsed = await callAnthropic(apiKey, 'claude-haiku-4-5-20251001', 500, PROMPTS.kanjiDetails(word));
+        const parsed = await callCloudFunction('fetchKanjiDetails', { word });
         return parsed.kanjiDetails || [];
       } catch (error) {
         console.error('[fetchKanjiDetails] FAILED:', error);
@@ -609,13 +655,12 @@ Return 1-3 options max. Return ONLY the JSON array.`
       }));
     };
 
-    // Phase 2 wrapper: Sonnet for pitch+sentences, Haiku for kanji, in parallel
-    const fetchExtendedData = async (word, apiKey, skipPitch = false, jlpt = null, definitions = []) => {
-      if (!apiKey) return null;
+    // Phase 2 wrapper: pitch+sentences and kanji details in parallel
+    const fetchExtendedData = async (word, skipPitch = false, jlpt = null, definitions = []) => {
       try {
         const [sonnetData, kanjiDetails] = await Promise.all([
-          fetchPitchAndSentences(word, apiKey, skipPitch, jlpt, definitions),
-          fetchKanjiDetails(word, apiKey)
+          fetchPitchAndSentences(word, skipPitch, jlpt, definitions),
+          fetchKanjiDetails(word)
         ]);
         const processedSentences = splitSentenceParts(sonnetData?.sentences || []);
         console.log('[fetchExtendedData] sentences:', processedSentences.length, 'kanji:', kanjiDetails.length);
@@ -630,11 +675,10 @@ Return 1-3 options max. Return ONLY the JSON array.`
       }
     };
     
-    // Resolve English word → Japanese candidates via API (considers homophones)
-    const resolveEnglishToJapanese = async (englishWord, apiKey) => {
-      if (!apiKey) return null;
+    // Resolve English word → Japanese candidates via Cloud Function
+    const resolveEnglishToJapanese = async (englishWord) => {
       try {
-        const parsed = await callAnthropic(apiKey, 'claude-haiku-4-5-20251001', 300, PROMPTS.resolveEnglish(englishWord));
+        const parsed = await callCloudFunction('resolveEnglish', { englishWord });
         return Array.isArray(parsed) ? parsed : [parsed];
       } catch (error) {
         console.error('Failed to resolve English→Japanese:', error);
@@ -642,48 +686,25 @@ Return 1-3 options max. Return ONLY the JSON array.`
       }
     };
     
-    // Google Cloud TTS — natural Japanese pronunciation
-    const playGoogleTTS = async (text, googleTTSKey, speed = 1.0, hiraganaHint = null) => {
-      if (!googleTTSKey) return null;
+    // Google Cloud TTS via Cloud Function — natural Japanese pronunciation
+    const playGoogleTTS = async (text, speed = 1.0, hiraganaHint = null) => {
       try {
-        let input;
+        const data = await callCloudFunction('synthesizeSpeech', { text, hiraganaHint, speed });
+        if (data.audioContent) {
+          return new Audio('data:audio/mp3;base64,' + data.audioContent);
+        }
+        // SSML failed on server, retry without hint
         if (hiraganaHint) {
-          const ssml = `<speak><phoneme alphabet="x-amazon-pron-kana" ph="${hiraganaHint}">${text}</phoneme></speak>`;
-          input = { ssml };
-        } else {
-          input = { text };
+          console.warn('[GoogleTTS] SSML may have failed, retrying without hint...');
+          return playGoogleTTS(text, speed, null);
         }
-        
-        const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleTTSKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            input,
-            voice: {
-              languageCode: 'ja-JP',
-              name: 'ja-JP-Neural2-B',
-              ssmlGender: 'FEMALE'
-            },
-            audioConfig: {
-              audioEncoding: 'MP3',
-              speakingRate: speed,
-              pitch: 0
-            }
-          })
-        });
-        if (!response.ok) {
-          const err = await response.text();
-          console.error('[GoogleTTS] Error:', response.status, err);
-          if (hiraganaHint) {
-            console.warn('[GoogleTTS] SSML failed, retrying with plain text...');
-            return playGoogleTTS(text, googleTTSKey, speed, null);
-          }
-          return null;
-        }
-        const data = await response.json();
-        return new Audio('data:audio/mp3;base64,' + data.audioContent);
+        return null;
       } catch (error) {
         console.error('[GoogleTTS] Failed:', error);
+        if (hiraganaHint) {
+          console.warn('[GoogleTTS] Retrying with plain text...');
+          return playGoogleTTS(text, speed, null);
+        }
         return null;
       }
     };
@@ -716,17 +737,13 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // SETTINGS PAGE
     // ============================================
     
-    const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, apiKey, onSaveKey, googleTTSKey, onSaveGoogleTTSKey, wordStore, pinnedWords, onDeleteUnpinned }) => {
+    const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinnedWords, onDeleteUnpinned, firebaseUser, onSignIn, onSignOut }) => {
       const [selectedLang, setSelectedLang] = useState(defaultLang);
       const [tipsOn, setTipsOn] = useState(() => getTipsEnabled() && !getTipsPermanentlyDismissed());
       const [saved, setSaved] = useState(false);
-      const [inputKey, setInputKey] = useState(apiKey || '');
-      const [inputGoogleKey, setInputGoogleKey] = useState(googleTTSKey || '');
       
       const handleSave = () => {
         onSaveDefaultLang(selectedLang);
-        onSaveKey(inputKey);
-        onSaveGoogleTTSKey(inputGoogleKey);
         setTipsEnabled(tipsOn);
         if (tipsOn) {
           setTipsPermanentlyDismissed(false);
@@ -771,7 +788,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
               <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
             </div>
-            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v2.66.0 · Hatake Development</div>
+            <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.0.0 · Hatake Development</div>
             
             <SGroup label="Preferences" />
             <SCard>
@@ -791,20 +808,17 @@ Return 1-3 options max. Return ONLY the JSON array.`
               />
             </SCard>
             
-            <SGroup label="API Keys" />
+            <SGroup label="Account" />
             <SCard>
-              <SRow icon="🤖" iconColor="#ede9fe" label="Claude API Key" sub={inputKey ? 'Configured' : 'Required for word data'}>
-                <input type="password" value={inputKey} onChange={e => setInputKey(e.target.value)}
-                  placeholder="sk-ant-..."
-                  style={{ width: '100%', marginTop: '8px', padding: '8px 10px', fontSize: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', fontFamily: 'monospace' }}
+              {firebaseUser ? (
+                <SRow icon="👤" iconColor="#d1fae5" label={firebaseUser.displayName || firebaseUser.email} sub={firebaseUser.email}
+                  right={<button onClick={onSignOut} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#fee2e2', color: '#991b1b', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Sign Out</button>}
                 />
-              </SRow>
-              <SRow icon="🔊" iconColor="#dbeafe" label="Google Cloud API Key" sub={inputGoogleKey ? 'Configured — TTS + STT' : 'Required for voice features'}>
-                <input type="password" value={inputGoogleKey} onChange={e => setInputGoogleKey(e.target.value)}
-                  placeholder="AIza..."
-                  style={{ width: '100%', marginTop: '8px', padding: '8px 10px', fontSize: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', fontFamily: 'monospace' }}
+              ) : (
+                <SRow icon="🔒" iconColor="#fee2e2" label="Not signed in" sub="Sign in to use voice and word lookup"
+                  right={<button onClick={onSignIn} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#ffe600', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Sign In</button>}
                 />
-              </SRow>
+              )}
             </SCard>
             
             <SGroup label="Databases" />
@@ -1310,17 +1324,17 @@ Return 1-3 options max. Return ONLY the JSON array.`
       },
       
       // Fetch word data progressively: core first, extended in background
-      fetchOrCreateWord: async (word, apiKey, onCoreReady, sourceContext) => {
-        console.log(`[WordStore] fetchOrCreateWord("${word}")${sourceContext ? ' from: ' + sourceContext : ''}, API key: ${apiKey ? 'YES (' + apiKey.substring(0, 10) + '...)' : 'MISSING'}`);
+      fetchOrCreateWord: async (word, onCoreReady, sourceContext) => {
+        console.log(`[WordStore] fetchOrCreateWord("${word}")${sourceContext ? ' from: ' + sourceContext : ''}, Auth: ${firebaseAuth.currentUser ? 'YES' : 'NO'}`);
         
-        if (!apiKey) {
-          console.warn('[WordStore] No API key — falling back to placeholder');
+        if (!firebaseAuth.currentUser) {
+          console.warn('[WordStore] Not signed in — falling back to placeholder');
           return WordStore.createPlaceholder(word);
         }
         
         // Try Phase 1: core data (kanji, reading, definition)
         console.log('[WordStore] Phase 1: fetching core data...');
-        const coreData = await fetchCoreData(word, apiKey, sourceContext);
+        const coreData = await fetchCoreData(word, sourceContext);
         console.log('[WordStore] Phase 1 result:', coreData ? 'SUCCESS' : 'FAILED');
         
         if (coreData) {
@@ -1348,7 +1362,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
           // Skip pitch in Claude call if Kanjium already has it
           console.log('[WordStore] Phase 2: fetching extended data...' + (kanjiumPitch ? ' (skipping pitch — Kanjium has it)' : ''));
           const japaneseWord = coreData.kanji || word;
-          const extData = await fetchExtendedData(japaneseWord, apiKey, !!kanjiumPitch, coreData.jlpt, coreData.definitions || []);
+          const extData = await fetchExtendedData(japaneseWord, !!kanjiumPitch, coreData.jlpt, coreData.definitions || []);
           console.log('[WordStore] Phase 2 result:', extData ? 'SUCCESS' : 'FAILED');
           
           if (extData) {
@@ -1929,7 +1943,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       );
     };
     
-    const HearTab = ({ word, googleTTSKey }) => {
+    const HearTab = ({ word }) => {
       const [isPlaying, setIsPlaying] = useState(null);
       const [activeMora, setActiveMora] = useState(-1);
       const animFrameRef = useRef(null);
@@ -1939,9 +1953,9 @@ Return 1-3 options max. Return ONLY the JSON array.`
         setIsPlaying(speed);
         const rate = speed === 'superslow' ? 0.45 : speed === 'slow' ? 0.7 : 1.0;
         
-        // Try Google TTS — returns audio element
-        if (googleTTSKey) {
-          const audio = await playGoogleTTS(word.kanji, googleTTSKey, rate, word.hiragana);
+        // Try Google TTS via Cloud Function — returns audio element
+        try {
+          const audio = await playGoogleTTS(word.kanji, rate, word.hiragana);
           if (audio) {
             // Wait for duration metadata
             await new Promise(resolve => {
@@ -1986,6 +2000,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
             return;
           }
           console.warn('[HearTab] Google TTS failed, falling back to browser');
+        } catch (err) {
+          console.warn('[HearTab] Google TTS error:', err.message, '— falling back to browser');
         }
         
         // Fallback: browser SpeechSynthesis (no pitch animation)
@@ -2203,7 +2219,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       );
     };
     
-    const WordCard = ({ word, googleTTSKey, onCaptureKanji, isPinned, onTogglePin }) => {
+    const WordCard = ({ word, onCaptureKanji, isPinned, onTogglePin }) => {
       const [activeTab, setActiveTab] = useState('define');
       const [showPinToast, setShowPinToast] = useState(false);
       const [showRubyDebug, setShowRubyDebug] = useState(false);
@@ -2357,7 +2373,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
               {word.isPartial ? <TabLoading label="Loading examples..." /> : <ExamplesTab word={word} />}
             </div>
             <div style={{ display: activeTab === 'hear' ? 'block' : 'none' }}>
-              {word.isPartial ? <TabLoading label="Loading pitch data..." /> : <HearTab word={word} googleTTSKey={googleTTSKey} />}
+              {word.isPartial ? <TabLoading label="Loading pitch data..." /> : <HearTab word={word} />}
             </div>
             <div style={{ display: activeTab === 'kanji' ? 'block' : 'none' }}>
               {word.isPartial ? <TabLoading label="Loading kanji details..." /> : <KanjiTab word={word} onCaptureKanji={onCaptureKanji} />}
@@ -2451,8 +2467,8 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // CAPTURE PAGE
     // ============================================
     
-    const CapturePage = ({ onCapture, defaultLang, apiKey, googleTTSKey }) => {
-      const speechMethod = getSpeechMethod(googleTTSKey);
+    const CapturePage = ({ onCapture, defaultLang }) => {
+      const speechMethod = getSpeechMethod();
       
       const [status, setStatus] = useState(() => speechMethod !== 'manual' ? 'listening' : 'manual');
       const [errorMessage, setErrorMessage] = useState('');
@@ -2663,13 +2679,12 @@ Return 1-3 options max. Return ONLY the JSON array.`
         activeTimersRef.current.countdown = countdownId;
         
         // ===== Cloud STT path =====
-        if (getSpeechMethod(getStoredGoogleTTSKey()) === 'cloudSTT') {
-          const gKey = getStoredGoogleTTSKey();
-          if (!gKey) {
+        if (getSpeechMethod() === 'cloudSTT') {
+          if (!firebaseAuth.currentUser) {
             clearInterval(countdownId);
             setStatus('manual');
-            setErrorMessage("Google API key required for voice capture on this device. Type instead:");
-            capLog('📱 iOS/non-Chrome detected, no Google key → manual mode', 'warn');
+            setErrorMessage("Sign in required for voice capture on this device. Type instead:");
+            capLog('📱 iOS/non-Chrome detected, not signed in → manual mode', 'warn');
             return;
           }
           
@@ -2677,7 +2692,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
           recStartTimeRef.current = Date.now();
           gotFinalRef.current = false;
           
-          const sttPromise = recognizeWithCloudSTT(gKey, recognizerLang);
+          const sttPromise = recognizeWithCloudSTT(recognizerLang);
           activeRecRef.current = { stop: () => sttPromise.ctrl?.stop?.(), abort: () => sttPromise.ctrl?.cancel?.(), ctrl: sttPromise.ctrl };
           
           // Bind volume meter and logging — direct DOM, no React re-renders
@@ -2859,7 +2874,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
       }, []);
       
       const handleEnglishResolve = async (englishText) => {
-        const results = await resolveEnglishToJapanese(englishText, apiKey);
+        const results = await resolveEnglishToJapanese(englishText);
         setResolving(false);
         
         if (results && results.length > 0) {
@@ -3367,7 +3382,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // VIEW PAGE
     // ============================================
     
-    const ViewPage = ({ word, onNewCapture, onCaptureKanji, isLoading, apiKey, onRetry, googleTTSKey, isPinned, onTogglePin }) => (
+    const ViewPage = ({ word, onNewCapture, onCaptureKanji, isLoading, onRetry, isPinned, onTogglePin }) => (
       <div style={{
         padding: '16px', paddingTop: '24px', paddingBottom: '100px', minHeight: '100vh',
         background: '#fafafa',
@@ -3398,14 +3413,14 @@ Return 1-3 options max. Return ONLY the JSON array.`
                 display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px'
               }}>
                 <p style={{ fontSize: '13px', fontWeight: '700', color: '#b91c1c' }}>
-                  {!apiKey ? '⚠️ No API key configured' : '⚠️ Failed to load word data'}
+                  {!firebaseAuth.currentUser ? '⚠️ Not signed in' : '⚠️ Failed to load word data'}
                 </p>
                 <p style={{ fontSize: '11px', color: '#991b1b', lineHeight: 1.4 }}>
-                  {!apiKey
-                    ? 'Add your API key in Settings to fetch word data.'
-                    : 'The API call failed. Check your API key and try again.'}
+                  {!firebaseAuth.currentUser
+                    ? 'Sign in via Settings to fetch word data.'
+                    : 'The API call failed. Try again.'}
                 </p>
-                {apiKey && onRetry && (
+                {firebaseAuth.currentUser && onRetry && (
                   <button onClick={onRetry} style={{
                     background: '#1a1a2e', color: '#fff', border: 'none', borderRadius: '8px',
                     padding: '8px 16px', fontSize: '12px', fontWeight: '700', cursor: 'pointer',
@@ -3414,7 +3429,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
                 )}
               </div>
             )}
-            {word && <WordCard word={word} googleTTSKey={googleTTSKey} onCaptureKanji={onCaptureKanji} isPinned={isPinned} onTogglePin={onTogglePin} />}
+            {word && <WordCard word={word} onCaptureKanji={onCaptureKanji} isPinned={isPinned} onTogglePin={onTogglePin} />}
           </>
         )}
       </div>
@@ -3477,21 +3492,57 @@ Return 1-3 options max. Return ONLY the JSON array.`
     // ============================================
     
     const App = () => {
-      console.log('[Kanji Hunt] v2.60.2 loaded');
+      console.log('[Kanji Hunt] v3.0.0 loaded');
       const [activeSection, setActiveSection] = useState('capture');
       const [captureResetKey, setCaptureResetKey] = useState(0);
       const [capturedWord, setCapturedWord] = useState(null);
       const [wordData, setWordData] = useState(null);
       const [wordStore, setWordStore] = useState(() => WordStore.load());
       const [isLoading, setIsLoading] = useState(false);
-      const [apiKey, setApiKey] = useState(() => getStoredAPIKey());
       const [defaultLang, setDefaultLang] = useState(() => getStoredDefaultLang());
-      const [googleTTSKey, setGoogleTTSKey] = useState(() => getStoredGoogleTTSKey());
       const [showSettings, setShowSettings] = useState(false);
+      const [firebaseUser, setFirebaseUser] = useState(null);
+      const [authLoading, setAuthLoading] = useState(true);
       const [pinnedWords, setPinnedWords] = useState(() => {
         try { return new Set(JSON.parse(localStorage.getItem('wordHunter_pinnedWords') || '[]')); }
         catch { return new Set(); }
       });
+      
+      // Listen for Firebase auth state changes
+      useEffect(() => {
+        const unsubscribe = firebaseAuth.onAuthStateChanged((user) => {
+          setFirebaseUser(user);
+          setAuthLoading(false);
+          console.log('[Auth]', user ? `Signed in as ${user.email}` : 'Not signed in');
+        });
+        return () => unsubscribe();
+      }, []);
+      
+      const handleSignIn = async () => {
+        try {
+          const provider = new firebase.auth.GoogleAuthProvider();
+          await firebaseAuth.signInWithPopup(provider);
+        } catch (error) {
+          console.error('[Auth] Sign-in failed:', error);
+          // Try redirect as fallback (needed on some mobile browsers)
+          if (error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user') {
+            try {
+              const provider = new firebase.auth.GoogleAuthProvider();
+              await firebaseAuth.signInWithRedirect(provider);
+            } catch (redirectError) {
+              console.error('[Auth] Redirect sign-in also failed:', redirectError);
+            }
+          }
+        }
+      };
+      
+      const handleSignOut = async () => {
+        try {
+          await firebaseAuth.signOut();
+        } catch (error) {
+          console.error('[Auth] Sign-out failed:', error);
+        }
+      };
       
       const togglePin = (word) => {
         setPinnedWords(prev => {
@@ -3502,19 +3553,9 @@ Return 1-3 options max. Return ONLY the JSON array.`
         });
       };
       
-      const handleSaveKey = (key) => {
-        setApiKey(key);
-        setStoredAPIKey(key);
-      };
-      
       const handleSaveDefaultLang = (lang) => {
         setDefaultLang(lang);
         setStoredDefaultLang(lang);
-      };
-      
-      const handleSaveGoogleTTSKey = (key) => {
-        setGoogleTTSKey(key);
-        setStoredGoogleTTSKey(key);
       };
       
       const handleCapture = async (word, sourceContext) => {
@@ -3543,7 +3584,7 @@ Return 1-3 options max. Return ONLY the JSON array.`
           setIsLoading(true);
           console.log(`Fetching data for "${word}"...`);
           
-          const fullData = await WordStore.fetchOrCreateWord(word, apiKey, (partialWord) => {
+          const fullData = await WordStore.fetchOrCreateWord(word, (partialWord) => {
             // Core data ready — show the card immediately
             setWordData(partialWord);
             setIsLoading(false);
@@ -3593,8 +3634,20 @@ Return 1-3 options max. Return ONLY the JSON array.`
       useEffect(() => {
         console.log('Word Store:', wordStore);
         console.log('Stored words:', Object.keys(wordStore));
-        console.log('API Key configured:', !!apiKey);
-      }, [wordStore, apiKey]);
+        console.log('Auth:', firebaseUser ? firebaseUser.email : 'not signed in');
+      }, [wordStore, firebaseUser]);
+      
+      if (authLoading) {
+        return (
+          <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ textAlign: 'center', color: '#888' }}>
+              <div style={{ width: '40px', height: '40px', border: '3px solid rgba(0,0,0,0.1)', borderTopColor: '#1a1a2e', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto' }}/>
+              <p style={{ marginTop: '16px', fontSize: '14px' }}>Loading...</p>
+              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            </div>
+          </div>
+        );
+      }
       
       return (
         <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', position: 'relative' }}>
@@ -3605,19 +3658,29 @@ Return 1-3 options max. Return ONLY the JSON array.`
               defaultLang={defaultLang}
               onSaveDefaultLang={handleSaveDefaultLang}
               onClose={() => setShowSettings(false)}
-              apiKey={apiKey}
-              onSaveKey={handleSaveKey}
-              googleTTSKey={googleTTSKey}
-              onSaveGoogleTTSKey={handleSaveGoogleTTSKey}
               wordStore={wordStore}
               pinnedWords={pinnedWords}
               onDeleteUnpinned={handleDeleteUnpinned}
+              firebaseUser={firebaseUser}
+              onSignIn={handleSignIn}
+              onSignOut={handleSignOut}
             />
           )}
           
-          {activeSection === 'capture' && <CapturePage key={captureResetKey} onCapture={handleCapture} defaultLang={defaultLang} apiKey={apiKey} googleTTSKey={googleTTSKey} />}
+          {activeSection === 'capture' && (
+            firebaseUser 
+              ? <CapturePage key={captureResetKey} onCapture={handleCapture} defaultLang={defaultLang} />
+              : <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#1a1a2e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <span style={{ fontSize: '48px' }}>🔒</span>
+                    <p style={{ marginTop: '16px', fontWeight: '600', color: '#fff', fontSize: '16px' }}>Sign in to start capturing</p>
+                    <p style={{ marginTop: '8px', color: 'rgba(255,255,255,0.5)', fontSize: '13px' }}>Use your Google account</p>
+                    <button onClick={handleSignIn} style={{ marginTop: '20px', background: '#ffe600', border: 'none', borderRadius: '12px', padding: '14px 32px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}>Sign in with Google</button>
+                  </div>
+                </div>
+          )}
           {activeSection === 'history' && <HistoryPage wordStore={wordStore} onSelectWord={handleSelectFromHistory} pinnedWords={pinnedWords} onTogglePin={togglePin} />}
-          {activeSection === 'view' && (wordData || isLoading) && <ViewPage word={wordData} onNewCapture={handleNewCapture} onCaptureKanji={handleCapture} isLoading={isLoading} apiKey={apiKey} onRetry={() => capturedWord && handleCapture(capturedWord)} googleTTSKey={googleTTSKey} isPinned={wordData && pinnedWords.has(wordData.kanji)} onTogglePin={togglePin} />}
+          {activeSection === 'view' && (wordData || isLoading) && <ViewPage word={wordData} onNewCapture={handleNewCapture} onCaptureKanji={handleCapture} isLoading={isLoading} onRetry={() => capturedWord && handleCapture(capturedWord)} isPinned={wordData && pinnedWords.has(wordData.kanji)} onTogglePin={togglePin} />}
           {activeSection === 'view' && !wordData && !isLoading && (
             <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ textAlign: 'center', color: '#888' }}>
