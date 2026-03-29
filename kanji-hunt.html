@@ -217,7 +217,7 @@
             resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence, timing: { captureMs: recMs, onstopMs: cleanupMs, packMs: pipelineMs - result.fetchMs, apiMs: result.fetchMs } });
           } catch(e) { logMsg('❌ Pipeline: ' + e.message); reject(new Error('stt-network-error')); }
         };
-        recorder.start(1000);
+        recorder.start(250);
         recording = true;
         logMsg('▶️ Recording');
         stopTimer = setTimeout(function() { if (recording) { logMsg('⏰ Hard cap'); stopRecording('timeout'); } }, MAX_MS);
