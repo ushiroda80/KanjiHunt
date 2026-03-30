@@ -33,7 +33,7 @@ export function recognizeWithCloudSTT(lang) {
   var SPEECH_THRESH = 4, SILENCE_THRESH = 2, SILENCE_MS = 650, MIN_SPEECH_MS = 200;
   var MAX_MS = 5500, SMOOTHING = 0.1, FFT = 512, METER_SCALE = 8;
   var recording = false, cancelled = false, stream = null, recorder = null, audioCtx = null, analyser = null;
-  var rafId = null, chunks = [], speechDetected = false, speechT0 = 0, silenceT0 = 0, captureT0 = 0, stopTimer = null;
+  var rafId = null, chunks = [], speechDetected = false, speechT0 = 0, silenceT0 = 0, captureT0 = 0, stopTimer = null, stopCalledAt = 0;
   var ctrl = { stop: null, cancel: null, updateMeter: null, log: null };
   var logMsg = function(msg) { if (ctrl.log) ctrl.log(msg); };
 
@@ -43,6 +43,7 @@ export function recognizeWithCloudSTT(lang) {
     recording = false;
     clearTimeout(stopTimer);
     if (rafId) cancelAnimationFrame(rafId);
+    stopCalledAt = Date.now();
     if (recorder && recorder.state !== 'inactive') recorder.stop();
   };
 
@@ -91,21 +92,37 @@ export function recognizeWithCloudSTT(lang) {
     var chunkPromises = [];
 
     // Create Worker at recording start (warm, not stale) — v2.62 architecture
+    var workerT0 = Date.now();
     var worker = new Worker(sttWorkerUrl);
-    logMsg('🔧 Worker created at recording start');
+    logMsg('🔧 Worker created at recording start (' + (Date.now() - workerT0) + 'ms)');
+
+    // Per-chunk timing: track when each chunk arrives and when its arrayBuffer() resolves
+    var chunkArrivedAt = [];
+    var chunkResolvedAt = [];
+    var chunkAbMs = [];
 
     recorder.ondataavailable = function(e) {
       if (e.data && e.data.size > 0) {
         var idx = chunks.length;
+        var arrivedAt = Date.now() - captureT0;
         chunks.push(e.data);
+        chunkArrivedAt[idx] = arrivedAt;
         // Pre-convert to ArrayBuffer during recording (while main thread is idle)
-        chunkPromises.push(e.data.arrayBuffer().then(function(ab) { chunkBuffers[idx] = ab; return ab; }));
+        var abT0 = Date.now();
+        chunkPromises.push(e.data.arrayBuffer().then(function(ab) {
+          chunkBuffers[idx] = ab;
+          chunkResolvedAt[idx] = Date.now() - captureT0;
+          chunkAbMs[idx] = Date.now() - abT0;
+          return ab;
+        }));
+        logMsg('📦 Chunk ' + idx + ': arrived at ' + arrivedAt + 'ms, ' + e.data.size + 'b');
       }
     };
 
     captureT0 = Date.now();
     recorder.onstop = async function() {
       var onstopT0 = Date.now();
+      var stopToOnstop = stopCalledAt ? (onstopT0 - stopCalledAt) : -1;
       stream.getTracks().forEach(function(t) { t.stop(); });
       cancelAnimationFrame(rafId);
       if (audioCtx) { audioCtx.close(); audioCtx = null; }
@@ -117,14 +134,22 @@ export function recognizeWithCloudSTT(lang) {
       var totalSize = chunks.reduce(function(s, c) { return s + c.size; }, 0);
       var cleanupMs = Date.now() - onstopT0;
       logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.filter(Boolean).length + ' pre-converted (cleanup: ' + cleanupMs + 'ms)');
+      logMsg('🔴 Stop→onstop gap: ' + stopToOnstop + 'ms');
       var pipelineT0 = Date.now();
       try {
         await Promise.all(chunkPromises);
         var abWaitReal = Date.now() - pipelineT0;
         var readyBuffers = chunkBuffers.filter(Boolean);
+        // Log per-chunk ab timing
+        for (var ci = 0; ci < chunks.length; ci++) {
+          logMsg('📦 Chunk ' + ci + ': arrived=' + (chunkArrivedAt[ci] || '?') + 'ms, ab resolved=' + (chunkResolvedAt[ci] || '?') + 'ms, ab took=' + (chunkAbMs[ci] || '?') + 'ms');
+        }
         logMsg('⏱ AB wait: ' + abWaitReal + 'ms (' + readyBuffers.length + '/' + chunks.length + ' ready)');
         // Get auth token on main thread (needs Firebase SDK), then hand off to Worker
+        var tokenT0 = Date.now();
         var token = await getAuthToken();
+        var tokenMs = Date.now() - tokenT0;
+        logMsg('🔑 Auth token: ' + tokenMs + 'ms');
         var postT0 = Date.now();
         var result = await new Promise(function(res, rej) {
           worker.onmessage = function(e) { res(e.data); worker.terminate(); };
