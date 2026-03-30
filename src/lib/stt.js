@@ -7,9 +7,12 @@
 import { firebaseAuth, CF_URLS, getAuthToken } from '../config/firebase.js';
 
 // Pre-create Worker URL at module load (once, reused across all captures)
-// Worker lives in public/ so it's served as a separate file (same origin).
-// Vite's default inlines workers as data: URLs which have null origin → CORS failure.
-const sttWorkerUrl = import.meta.env.BASE_URL + 'stt-worker.js';
+// Exact v2.62 approach: inline worker code as string → Blob URL (in-memory, no HTTP fetch).
+// Vite's default `new URL()` pattern inlines as data: URL which has null origin → CORS failure.
+// File-path approach (`public/stt-worker.js`) fixed CORS but showed 2s arrayBuffer() stalls
+// that didn't occur with Blob URL in kanji-hunt.html. Restoring Blob URL to match v2.62 exactly.
+const sttWorkerCode = 'self.onmessage=async function(e){var t0=Date.now(),d=e.data,cb=d.chunkBuffers,token=d.authToken,cfUrl=d.cfUrl,ln=d.lang,mt=d.mimeType;try{var tl=0;for(var i=0;i<cb.length;i++)tl+=cb[i].byteLength;var m=new Uint8Array(tl),o=0;for(var i=0;i<cb.length;i++){m.set(new Uint8Array(cb[i]),o);o+=cb[i].byteLength}var C=8192,b="";for(var i=0;i<m.length;i+=C)b+=String.fromCharCode.apply(null,m.subarray(i,i+C));var b64=btoa(b),b64Ms=Date.now()-t0;var ft0=Date.now(),r=await fetch(cfUrl,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({audioBase64:b64,lang:ln,mimeType:mt})});if(!r.ok){self.postMessage({error:"stt-api-error"});return}var data=await r.json(),fMs=Date.now()-ft0,tMs=Date.now()-t0;var tr=data.transcript||"",al=data.alternatives||[],co=data.confidence||0;self.postMessage({ok:true,transcript:tr,alternatives:al,confidence:co,b64Ms:b64Ms,fetchMs:fMs,totalMs:tMs})}catch(err){self.postMessage({error:"stt-network-error"})}};';
+const sttWorkerUrl = URL.createObjectURL(new Blob([sttWorkerCode], { type: 'application/javascript' }));
 
 // Determine best available speech input method
 // No parameters — checks firebaseAuth.currentUser
