@@ -7,8 +7,9 @@
 import { firebaseAuth, CF_URLS, getAuthToken } from '../config/firebase.js';
 
 // Pre-create Worker URL at module load (once, reused across all captures)
-// Vite resolves the worker file URL at build time
-const sttWorkerUrl = new URL('./stt-worker.js', import.meta.url);
+// Worker lives in public/ so it's served as a separate file (same origin).
+// Vite's default inlines workers as data: URLs which have null origin → CORS failure.
+const sttWorkerUrl = import.meta.env.BASE_URL + 'stt-worker.js';
 
 // Determine best available speech input method
 // No parameters — checks firebaseAuth.currentUser
@@ -87,7 +88,7 @@ export function recognizeWithCloudSTT(lang) {
     var chunkPromises = [];
 
     // Create Worker at recording start (warm, not stale) — v2.62 architecture
-    var worker = new Worker(sttWorkerUrl, { type: 'module' });
+    var worker = new Worker(sttWorkerUrl);
     logMsg('🔧 Worker created at recording start');
 
     recorder.ondataavailable = function(e) {
