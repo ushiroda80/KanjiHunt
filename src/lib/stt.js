@@ -43,6 +43,11 @@ export function recognizeWithCloudSTT(lang) {
     recording = false;
     clearTimeout(stopTimer);
     if (rafId) cancelAnimationFrame(rafId);
+    // Early cleanup: free Safari resources BEFORE recorder.stop() triggers onstop,
+    // so arrayBuffer() on late chunks has less contention
+    if (analyser) { analyser.disconnect(); }
+    if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); }
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
     stopCalledAt = Date.now();
     if (recorder && recorder.state !== 'inactive') recorder.stop();
   };
@@ -123,9 +128,7 @@ export function recognizeWithCloudSTT(lang) {
     recorder.onstop = async function() {
       var onstopT0 = Date.now();
       var stopToOnstop = stopCalledAt ? (onstopT0 - stopCalledAt) : -1;
-      stream.getTracks().forEach(function(t) { t.stop(); });
-      cancelAnimationFrame(rafId);
-      if (audioCtx) { audioCtx.close(); audioCtx = null; }
+      // Cleanup already done in stopRecording() — these are safety nets (idempotent)
       clearTimeout(stopTimer);
       recording = false;
       if (cancelled) { logMsg('↩ onstop: cancelled (user switched to manual)'); worker.terminate(); return; }
