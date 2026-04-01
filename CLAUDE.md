@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.1.3 · March 2026*
+*v3.1.4 · April 2026*
 
 ---
 
@@ -544,6 +544,12 @@ cache/
 - What label scheme is clear to a learner without being overwhelming?
 - Should frequency/usage data live on the picking page or the learn page or both?
 - How do we handle words that are simultaneously literal and natural (no differentiation needed)?
+
+---
+
+## STT Latency Research Backlog
+
+- **Raw PCM (LINEAR16) vs WebM to Google STT** — Test whether sending raw PCM audio affects Google API response times vs current WebM/Opus. Would require AudioWorklet to capture raw samples (bypasses MediaRecorder entirely — no blobs, no arrayBuffer). Also eliminates Safari's slow blob unwrapping problem at the source. Research note: no published benchmarks found comparing format → API latency; Google docs say format affects accuracy/bandwidth, not response speed. Worth testing empirically with our own capture logs since the `api=` timing in our pipeline log isolates Google round-trip exactly.
 
 ---
 
