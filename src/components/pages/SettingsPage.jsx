@@ -53,7 +53,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
           <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
         </div>
-        <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.1.4 · Hatake Development</div>
+        <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.1.5 · Hatake Development</div>
 
         <SGroup label="Preferences" />
         <SCard>

@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.1.4 · April 2026*
+*v3.1.5 · April 2026*
 
 ---
 
@@ -88,7 +88,7 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 
 2. **Pre-conversion during recording is the only proven mitigation.** Calling `arrayBuffer()` in `ondataavailable` gives it a ~1s head start during idle time. By `onstop`, early chunks are already converted. This works because Safari can finish the slow read when given enough time — not because moving it off the main thread helps.
 
-3. **Short recordings (< ~1.5s of speech) are the worst case.** They produce only 1 chunk at `onstop` time, leaving zero idle window for pre-conversion. The full ~2s stall hits. This is an inherent limitation — there is no known fix for single-chunk captures on Safari.
+3. **Short recordings (< ~1.5s of speech) were the worst case — now mitigated.** They produce only 1 chunk at `onstop` time, leaving zero idle window for pre-conversion. Previously caused a full ~2s stall. Fixed in v3.1.4: cleaning up RAF loop, AnalyserNode, AudioContext, and stream tracks *before* `recorder.stop()` frees Safari resources and drops single-chunk Package time to ~4ms. The stall was partly resource contention, not purely an inherent platform limitation.
 
 4. **Safari ignores `timeslice` in `recorder.start(ms)`.** Setting 250ms chunks has no effect — Safari delivers chunks at ~1s intervals regardless. Cannot use smaller chunks to work around point 3.
 
@@ -190,6 +190,7 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - **v3.1.0** — **Rate limit UI (Phase 3, Step 4).** Top-right badge on capture page shows remaining captures (e.g. "27"). Badge turns red at 0. When limit reached: modal overlay dims capture area with centered dialog showing icon, "Limit reached" title, reset date, "Get more captures" CTA (placeholder), and dismiss button. Settings page: new "Usage" section between Account and Databases with progress ring, "73 / 100" count, progress bar (yellow→red at limit), and reset date. Usage fetched from `getUsage` Cloud Function on sign-in and after each successful capture.
 - **v3.1.1–v3.1.2** — STT pipeline experiments (250ms chunks, FileReader, Worker-side blob read). All failed — see "Retro: STT Pipeline During Firebase Migration" section. Key finding: Safari's `blob.arrayBuffer()` is inherently slow (~2s), not a main-thread contention issue.
 - **v3.1.3** — **Exact v2.62 STT architecture restored.** Copied line-for-line, only substituting auth token + Cloud Function URL for Google API key. Confirmed performing at v2.62 baseline (~10ms Package time on multi-chunk captures). Diagnostic chunk logging still in place (temporary).
+- **v3.1.4** — **Early cleanup before recorder.stop().** Moved RAF cancel, AnalyserNode disconnect, stream track stop, and AudioContext close from `onstop` to `stopRecording()` — i.e., before `recorder.stop()` is called. Result: Package time on late single chunks dropped from ~427ms to 4ms. Confirms that Safari `arrayBuffer()` stall on short recordings is partly resource contention, not purely an inherent platform limitation. The v3.1.2 Worker test (2221ms inside Worker) had all these processes still running — the Worker test disproved *main-thread* contention, not contention overall.
 
 ---
 
@@ -261,7 +262,7 @@ During the Firebase auth migration, the STT Worker needed to change from calling
 1. **Proven architectures are not fungible.** "Same logic, different structure" is not the same thing. The v2.55 pipeline worked because of specific timing relationships between chunk arrival, idle time, and `onstop`. Restructuring broke those relationships even when the "logic" was equivalent.
 2. **When migrating proven systems, change the minimum.** The correct v3.0 migration was: copy v2.62 line-for-line, swap `googleKey` for `authToken`, swap Google URL for Cloud Function URL. Three substitutions, zero restructuring. Everything else was unnecessary risk.
 3. **"Should work in theory" is not evidence.** Multiple approaches (no Worker, FileReader, Worker-side blob read, smaller chunks) were reasonable hypotheses that all failed. The only reliable signal was "this exact code worked before."
-4. **Safari's blob implementation is a platform constraint, not a bug to work around.** The ~2s `arrayBuffer()` latency and ignored `timeslice` are just how Safari works. Design around them (pre-conversion head start) rather than trying to fix them.
+4. **Safari's blob stall is partly resource contention, not a pure platform constraint.** The v3.1.2 Worker test (2221ms inside Worker) disproved *main-thread React* contention — but RAF loop, AnalyserNode, AudioContext, and stream tracks were still running. v3.1.4 proved those matter: tearing them down before `recorder.stop()` dropped single-chunk Package time from ~427ms to ~4ms. `timeslice` being ignored is still a true platform constraint.
 ```
 
 ---
@@ -384,9 +385,9 @@ const firebaseConfig = {
 - Deploy command: `cd /Users/JKO && firebase deploy --only functions`
 
 **Working process — IMPORTANT:**
-- Tadashi is the PM, not an engineer. Never ask him to make code changes manually (e.g. "add this line to index.js"). Always provide the complete, ready-to-deploy file.
+- Tadashi is the PM, not an engineer. Never ask him to make code changes manually. Always make code changes directly.
 - For Cloud Functions: provide the full `index.js` file, ready to drop into `/Users/JKO/functions/`. Tadashi deploys via `firebase deploy --only functions`.
-- For client code: provide the full `kanji-hunt.html`, ready to paste into GitHub.
+- For client code: use the `/deploy` skill — it handles version bump, `npm run build`, commit, and push automatically.
 
 #### Step 3: Client-side auth + API migration ✅ DONE (v3.0.0)
 
