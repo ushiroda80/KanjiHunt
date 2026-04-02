@@ -20,7 +20,7 @@ These guide every decision. When in doubt, refer here.
 
 2. **No unnecessary API calls.** Romaji comes from a static lookup table (~80 entries). Mora splitting is local. Furigana is generated client-side from a kanji readings database with backtracking. Only definitions, example sentences, and TTS require network calls.
 
-3. **Single file architecture.** The entire app is one HTML file with inline React/Babel. This is intentional — it keeps deployment trivial, state management simple, and avoids build toolchain complexity. Don't "improve" this into a multi-file project.
+3. **Vite + React component architecture.** The app is built from `src/` using Vite. Components are in `src/components/`, shared logic in `src/lib/`, Firebase config in `src/config/`. Build output goes to `dist/`. The legacy `kanji-hunt.html` (single-file version) still exists in the repo root but is **not** the build source — do not edit it for production changes. All code changes go in `src/`.
 
 4. **Feel native, not web.** The UI targets mobile-first, iOS-like feel. Transitions are 150ms ease. No bouncy animations. Cards have subtle shadows. The capture page is the only dark-mode surface.
 
@@ -58,25 +58,25 @@ Adding a new input method (OCR, paste, etc.) = new Stage 1 adapter.
 Adding a new language = new Stage 2 resolver.
 Shared utilities: `extractReading()`, `handleRecordingResult()`, `handleResolvedSubmit()`.
 
-### Pitch accent pipeline
+### Pitch accent pipeline (`src/lib/pitch.js`)
 - **Primary:** Kanjium database (embedded, from Wadoku). Gives downstep number → `downstepToPitchArray()` + `splitIntoMorae()` = 100% accurate pitch array.
 - **Fallback:** AI returns `pitchAccent` array in API response. Run through `sanitizePitch()` which merges incorrectly split compound kana (し + ょ → しょ). Flagged as "AI-generated" in UI.
 - **Display:** Grid-based layout. Fixed 36px columns per mora. SVG dots positioned mathematically at `col × 36 + 18`. No DOM measurement, no `getBoundingClientRect`. This was changed from a measurement-based approach that broke due to font loading timing.
 - **Animation:** During TTS playback, dots pulse in sequence. Timing estimated from audio duration with weighted mora distribution (っ=0.5x, ん=0.8x, ー=1.2x, vowels=0.9x, standard=1.0x). Leading/trailing silence trimmed (~15%).
 
-### Furigana pipeline
+### Furigana pipeline (`src/components/FuriganaText.jsx`, `src/components/RubyDisplay.jsx`)
 - `generateRubyParts(kanji, hiragana)` splits kanji string into segments, matches readings using kana as anchors.
 - For consecutive kanji, `splitKanjiReading()` uses a readings dictionary (KANJIDIC-derived) with backtracking to find valid per-character splits.
 - Always regenerated client-side from kanji + hiragana. Never trust API-provided ruby splits.
 
-### Speech recognition
+### Speech recognition (`src/lib/stt.js`)
 - `getSpeechMethod()` — single function determines input path (no parameters — checks `firebaseAuth.currentUser`):
   - iOS → Cloud STT (MediaRecorder + `recognizeSpeech` Cloud Function)
   - Has Web Speech API (Chrome desktop) → Web Speech API (free, instant)
   - Has MediaRecorder + signed in → Cloud STT
   - Otherwise → manual text input
 - Cloud STT: MediaRecorder captures audio, detects format via `isTypeSupported()`, sends to `recognizeSpeech` Cloud Function with `ENCODING_UNSPECIFIED` for Safari's MP4/AAC. **Silence detection** via AnalyserNode (fftSize 512, smoothing 0.1) auto-stops recording after 650ms of silence following 200ms+ of speech. Thresholds: speech RMS > 4, silence RMS < 2 (0-128 scale, tuned from iOS 18.7 Safari diagnostics). 5.5s hard cap as safety net. Graceful fallback to timeout-only if AnalyserNode setup fails.
-- **Post-stop pipeline (v3.1.3 — v2.62 architecture):** Audio chunks pre-converted to ArrayBuffer during recording via `ondataavailable`. On stop: auth token obtained on main thread (needs Firebase SDK), then Worker receives pre-converted buffers + token + Cloud Function URL via `postMessage`. Worker does b64 encode + fetch `recognizeSpeech` Cloud Function with Bearer auth. Main thread is free.
+- **Post-stop pipeline (v3.1.5 — v2.62 architecture, in `src/lib/stt.js`):** Audio chunks pre-converted to ArrayBuffer during recording via `ondataavailable`. On silence detection: if all speech is in already-delivered chunks (`silenceT0 <= lastChunkTime`), pipeline fires immediately from `stopRecording()` without waiting for Safari's `onstop` (~1.9s savings). Otherwise falls back to `onstop`. Auth token obtained on main thread (needs Firebase SDK), then Worker receives pre-converted buffers + token + Cloud Function URL via `postMessage`. Worker does b64 encode + fetch `recognizeSpeech` Cloud Function with Bearer auth. Main thread is free.
 - Chrome Web Speech API: ~10-20% silent failure rate for single-syllable words. 250ms visual delay on capture start. Has built-in silence detection (no AnalyserNode needed).
 - No browser/UA sniffing — capability detection only.
 
@@ -102,13 +102,13 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - If SSML fails, retries with plain text.
 - Voice: `ja-JP-Neural2-B` (female) — configured server-side in Cloud Function.
 
-### API model split
-- **All API calls route through Cloud Functions** (asia-northeast1). Client sends parameters + Firebase auth token. Cloud Function adds API key server-side, calls Anthropic/Google, returns result.
+### API model split (`src/lib/api.js`, `src/config/firebase.js`)
+- **All API calls route through Cloud Functions** (asia-northeast1). Client sends parameters + Firebase auth token via `callCloudFunction()` in `src/lib/api.js`. Cloud Function adds API key server-side, calls Anthropic/Google, returns result. Firebase config and `getAuthToken()` are in `src/config/firebase.js`.
 - **Definitions, examples, word data:** Claude (model selection handled server-side in Cloud Functions).
 - Prompt engineering is critical — the prompts specify exact JSON schema, mora splitting rules, JLPT levels, definition ordering by frequency.
 - **Cloud Function URLs** are public but auth-gated — every request must include a valid Firebase `idToken` in the `Authorization: Bearer` header.
 
-### State management
+### State management (`src/lib/wordStore.js`, `src/lib/storage.js`)
 - All word data in localStorage via `WordStore`.
 - `normalize()` runs on every word load — fixes cached data automatically when logic improves.
 - Pinned words persist separately (`wordHunter_pinnedWords`).
@@ -123,6 +123,10 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - Voice capture (Japanese and English → Japanese lookup)
 - iPhone voice capture via Google Cloud STT (MediaRecorder → Cloud API)
 - Manual text input fallback
+- Firebase Auth (Google sign-in, capture gated behind auth)
+- Cloud Function API proxy (all API calls server-side, no keys in client)
+- Rate limiting UI (capture badge, limit modal, Settings usage card)
+- Auto-confirm for high-confidence captures (≥75% skip editing screen)
 - Multi-definition display with frequency tags
 - Pitch accent visualization with playback animation
 - Google Neural TTS with normal, slow, and super slow (0.45x) modes
@@ -142,12 +146,11 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 ### What's known broken or incomplete
 - Practice mode is a placeholder — no real quiz/SRS logic yet
 - Speech recognition has inherent ~10-20% failure rate on Chrome (Web Speech API limitation)
-- Cloud STT has ~1s latency + 3.5s recording window (no streaming)
+- Cloud STT has ~1s latency + variable recording window (no streaming)
 - Very long words (10+ morae) may need horizontal scroll in pitch display
 - Service worker caches aggressively — users may need `?v=N` param to bust cache on updates
-- Rate limiting UI not yet implemented (Step 4) — usage counter placeholder needed
 - Firestore security rules not yet deployed (Step 5)
-- Cloud Functions need CORS headers verified for cross-origin requests from GitHub Pages
+- `kanji-hunt.html` (legacy single-file) is out of sync with `src/` — do not use as reference for current behavior
 
 ### Version history (major milestones)
 - **v2.17** — API split (Sonnet→Haiku for definitions), A/B test framework
@@ -191,6 +194,7 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - **v3.1.1–v3.1.2** — STT pipeline experiments (250ms chunks, FileReader, Worker-side blob read). All failed — see "Retro: STT Pipeline During Firebase Migration" section. Key finding: Safari's `blob.arrayBuffer()` is inherently slow (~2s), not a main-thread contention issue.
 - **v3.1.3** — **Exact v2.62 STT architecture restored.** Copied line-for-line, only substituting auth token + Cloud Function URL for Google API key. Confirmed performing at v2.62 baseline (~10ms Package time on multi-chunk captures). Diagnostic chunk logging still in place (temporary).
 - **v3.1.4** — **Early cleanup before recorder.stop().** Moved RAF cancel, AnalyserNode disconnect, stream track stop, and AudioContext close from `onstop` to `stopRecording()` — i.e., before `recorder.stop()` is called. Result: Package time on late single chunks dropped from ~427ms to 4ms. Confirms that Safari `arrayBuffer()` stall on short recordings is partly resource contention, not purely an inherent platform limitation. The v3.1.2 Worker test (2221ms inside Worker) had all these processes still running — the Worker test disproved *main-thread* contention, not contention overall.
+- **v3.1.5** — **Early pipeline fire.** Bypass Safari's stop→onstop gap (~1.9s) by firing STT pipeline from `stopRecording()` when silence was detected before the last chunk arrived (`silenceT0 <= lastChunkTime`). Safety check prevents audio clipping on longer phrases — falls back to `onstop` when speech may span chunk boundaries. Also: **Vite migration recognized in CLAUDE.md** — updated architecture docs, file locations, and design principles to reflect `src/` structure (legacy `kanji-hunt.html` no longer the build source).
 
 ---
 
@@ -314,7 +318,7 @@ During the Firebase auth migration, the STT Worker needed to change from calling
 
 **Architecture decisions (locked):**
 - **Firebase Blaze plan** (pay-as-you-go). Unlocks Cloud Functions. Free tier still applies — at current scale, cost is $0-2/month. Budget alerts set up to catch spikes.
-- **Client SDK: firebase-auth.js only** (~20KB via CDN). No Firestore SDK on client. All data reads/writes go through Cloud Functions. Keeps the single-file app lightweight.
+- **Client SDK: firebase-auth.js only** (via npm/Vite). No Firestore SDK on client. All data reads/writes go through Cloud Functions. Keeps the client lightweight.
 - **No localStorage migration.** Clean slate — existing localStorage word data stays as-is for reference but is not imported to Firestore.
 - **Server outage: generic error page.** If Cloud Functions are unreachable, show a simple "temporarily unavailable" screen. No fallback to localStorage-only mode.
 - **Three separate Claude Cloud Functions** (Option B). Called in parallel from client, matching current progressive-fill UX where the word card fills in as each response arrives.
@@ -387,7 +391,7 @@ const firebaseConfig = {
 **Working process — IMPORTANT:**
 - Tadashi is the PM, not an engineer. Never ask him to make code changes manually. Always make code changes directly.
 - For Cloud Functions: provide the full `index.js` file, ready to drop into `/Users/JKO/functions/`. Tadashi deploys via `firebase deploy --only functions`.
-- For client code: use the `/deploy` skill — it handles version bump, `npm run build`, commit, and push automatically.
+- For client code: **edit files in `src/`** (not `kanji-hunt.html`). The app is built with Vite from `src/`. Use the `/deploy` skill — it handles version bump, `npm run build`, commit, and push automatically.
 
 #### Step 3: Client-side auth + API migration ✅ DONE (v3.0.0)
 
@@ -571,9 +575,40 @@ cache/
 
 ## Files
 
+### Source (Vite + React — this is what gets built and deployed)
+
 | File | Purpose |
 |------|---------|
-| `kanji-hunt.html` | The app (single file, ~3900 lines) |
+| `src/App.jsx` | Root component, auth state, nav, routing |
+| `src/main.jsx` | Vite entry point |
+| `src/config/firebase.js` | Firebase init, auth, Cloud Function URLs, `getAuthToken()` |
+| `src/lib/stt.js` | Cloud STT: `recognizeWithCloudSTT()`, `getSpeechMethod()`, silence detection, Worker pipeline |
+| `src/lib/api.js` | `callCloudFunction()`, `fetchCoreData()`, `fetchPitchAndSentences()`, `fetchKanjiDetails()`, `resolveEnglishToJapanese()`, `playGoogleTTS()` |
+| `src/lib/pitch.js` | Pitch accent logic: `splitIntoMorae()`, `downstepToPitchArray()`, `sanitizePitch()` |
+| `src/lib/wordStore.js` | `WordStore` — localStorage word data CRUD |
+| `src/lib/storage.js` | localStorage helpers (lang pref, tips, etc.) |
+| `src/lib/databases.js` | Reference DB loading (pitch, JLPT, readings) from GitHub |
+| `src/components/pages/CapturePage.jsx` | Capture UI: mic, silence viz, editing, picking, debug log |
+| `src/components/pages/ViewPage.jsx` | Learn page: word card, tabs, TTS |
+| `src/components/pages/HistoryPage.jsx` | Word history list, stars, filters |
+| `src/components/pages/SettingsPage.jsx` | Settings: account, usage, databases, prefs |
+| `src/components/WordCard.jsx` | Word card component (definitions, pitch, furigana) |
+| `src/components/BottomNav.jsx` | M3 bottom navigation bar |
+| `src/styles/global.css` | Global styles |
+
+### Build & config
+
+| File | Purpose |
+|------|---------|
+| `vite.config.js` | Vite build config |
+| `package.json` | Dependencies, `npm run build` script |
+| `dist/` | Build output (gitignored), deployed to GitHub Pages |
+
+### Legacy & reference
+
+| File | Purpose |
+|------|---------|
+| `kanji-hunt.html` | **Legacy** single-file version. NOT the build source. Kept for reference but do not edit for production changes. |
 | `manifest.json` | PWA manifest (app name, icon, theme) |
 | `sw.js` | Service worker (app shell caching) |
 | `icon-512.svg` | App icon — heiban pitch dots on yellow |
@@ -582,7 +617,11 @@ cache/
 | `data/readings.json` | Kanji readings DB (KANJIDIC) |
 | `export-data.html` | Tool to export localStorage DBs as downloadable files |
 | `kanji-hunt-style-guide.md` | CSS/component visual reference |
-| `PRODUCT.md` | This document |
+
+### Test pages
+
+| File | Purpose |
+|------|---------|
 | `stt-test.html` | Standalone iPhone STT test page |
 | `usage-notes-test.html` | Usage notes prompt comparison (Haiku vs Sonnet) |
 | `model-comparison-test.html` | fetchCoreData/fetchPitchAndSentences model comparison |
