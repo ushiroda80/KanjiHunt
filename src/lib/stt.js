@@ -34,6 +34,7 @@ export function recognizeWithCloudSTT(lang) {
   var MAX_MS = 5500, SMOOTHING = 0.1, FFT = 512, METER_SCALE = 8;
   var recording = false, cancelled = false, stream = null, recorder = null, audioCtx = null, analyser = null;
   var rafId = null, chunks = [], speechDetected = false, speechT0 = 0, silenceT0 = 0, captureT0 = 0, stopTimer = null, stopCalledAt = 0;
+  var pipelineStarted = false, lastChunkTime = 0, runPipeline = null;
   var ctrl = { stop: null, cancel: null, updateMeter: null, log: null };
   var logMsg = function(msg) { if (ctrl.log) ctrl.log(msg); };
 
@@ -50,6 +51,11 @@ export function recognizeWithCloudSTT(lang) {
     if (audioCtx) { audioCtx.close(); audioCtx = null; }
     stopCalledAt = Date.now();
     if (recorder && recorder.state !== 'inactive') recorder.stop();
+    // Fire pipeline early if all speech is in pre-converted chunks
+    if (silenceT0 && lastChunkTime && silenceT0 <= lastChunkTime) {
+      logMsg('⚡ Early pipeline: silence before last chunk');
+      setTimeout(function() { if (runPipeline) runPipeline(); }, 50);
+    }
   };
 
   var monitorLoop = function() {
@@ -111,6 +117,7 @@ export function recognizeWithCloudSTT(lang) {
         var idx = chunks.length;
         var arrivedAt = Date.now() - captureT0;
         chunks.push(e.data);
+        lastChunkTime = Date.now();
         chunkArrivedAt[idx] = arrivedAt;
         // Pre-convert to ArrayBuffer during recording (while main thread is idle)
         var abT0 = Date.now();
@@ -125,30 +132,24 @@ export function recognizeWithCloudSTT(lang) {
     };
 
     captureT0 = Date.now();
-    recorder.onstop = async function() {
-      var onstopT0 = Date.now();
-      var stopToOnstop = stopCalledAt ? (onstopT0 - stopCalledAt) : -1;
-      // Cleanup already done in stopRecording() — these are safety nets (idempotent)
-      clearTimeout(stopTimer);
-      recording = false;
-      if (cancelled) { logMsg('↩ onstop: cancelled (user switched to manual)'); worker.terminate(); return; }
+    // Pipeline function — triggered from stopRecording (early) or onstop (fallback)
+    runPipeline = async function() {
+      if (pipelineStarted) return;
+      pipelineStarted = true;
+      if (cancelled) { logMsg('↩ Pipeline: cancelled'); worker.terminate(); return; }
       if (chunks.length === 0) { worker.terminate(); return reject(new Error('no-audio')); }
       var recMs = Date.now() - captureT0;
       var totalSize = chunks.reduce(function(s, c) { return s + c.size; }, 0);
-      var cleanupMs = Date.now() - onstopT0;
-      logMsg('🔴 Stopped. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.filter(Boolean).length + ' pre-converted (cleanup: ' + cleanupMs + 'ms)');
-      logMsg('🔴 Stop→onstop gap: ' + stopToOnstop + 'ms');
+      logMsg('📤 Pipeline start. ' + totalSize + 'b, ' + recMs + 'ms, ' + chunks.length + ' chunks, ' + chunkBuffers.filter(Boolean).length + ' pre-converted');
       var pipelineT0 = Date.now();
       try {
         await Promise.all(chunkPromises);
         var abWaitReal = Date.now() - pipelineT0;
         var readyBuffers = chunkBuffers.filter(Boolean);
-        // Log per-chunk ab timing
         for (var ci = 0; ci < chunks.length; ci++) {
           logMsg('📦 Chunk ' + ci + ': arrived=' + (chunkArrivedAt[ci] || '?') + 'ms, ab resolved=' + (chunkResolvedAt[ci] || '?') + 'ms, ab took=' + (chunkAbMs[ci] || '?') + 'ms');
         }
         logMsg('⏱ AB wait: ' + abWaitReal + 'ms (' + readyBuffers.length + '/' + chunks.length + ' ready)');
-        // Get auth token on main thread (needs Firebase SDK), then hand off to Worker
         var tokenT0 = Date.now();
         var token = await getAuthToken();
         var tokenMs = Date.now() - tokenT0;
@@ -163,8 +164,14 @@ export function recognizeWithCloudSTT(lang) {
         var postMs = Date.now() - postT0;
         if (result.error) { logMsg('❌ Worker: ' + result.error); return reject(new Error(result.error)); }
         logMsg('⏱ Worker: b64=' + result.b64Ms + 'ms, api=' + result.fetchMs + 'ms, total=' + result.totalMs + 'ms | Post: ' + postMs + 'ms | Pipeline: ' + pipelineMs + 'ms');
-        resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence, timing: { captureMs: recMs, onstopMs: cleanupMs, packMs: pipelineMs - result.fetchMs, apiMs: result.fetchMs } });
+        resolve({ transcript: result.transcript, alternatives: result.alternatives, confidence: result.confidence, timing: { captureMs: recMs, packMs: pipelineMs - result.fetchMs, apiMs: result.fetchMs } });
       } catch(e) { logMsg('❌ Pipeline: ' + e.message); reject(new Error('stt-network-error')); }
+    };
+    recorder.onstop = function() {
+      var stopToOnstop = stopCalledAt ? (Date.now() - stopCalledAt) : -1;
+      logMsg('🔴 onstop fired (gap: ' + stopToOnstop + 'ms)');
+      if (pipelineStarted) { logMsg('⏩ onstop: pipeline already started'); return; }
+      runPipeline();
     };
 
     recorder.start(1000);
