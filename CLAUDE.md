@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.1.5 · April 2026*
+*v3.1.6 · April 2026*
 
 ---
 
@@ -39,7 +39,8 @@ Decisions that were non-obvious and would be expensive to re-derive.
 Stage 1: RECORD (speech input)
   getSpeechMethod() → 'webSpeech' | 'cloudSTT' | 'manual'
   webSpeech: Chrome Web Speech API → streams interims → final result
-  cloudSTT: MediaRecorder → Google Cloud STT → result
+  cloudSTT (batch): MediaRecorder → Google Cloud STT → result
+  cloudSTT (streaming): AudioWorklet → WebSocket → Google streamingRecognize → result
   manual: user types text
   All paths output: { transcript, alternatives, language, reading }
 
@@ -79,6 +80,18 @@ Shared utilities: `extractReading()`, `handleRecordingResult()`, `handleResolved
 - **Post-stop pipeline (v3.1.5 — v2.62 architecture, in `src/lib/stt.js`):** Audio chunks pre-converted to ArrayBuffer during recording via `ondataavailable`. On silence detection: if all speech is in already-delivered chunks (`silenceT0 <= lastChunkTime`), pipeline fires immediately from `stopRecording()` without waiting for Safari's `onstop` (~1.9s savings). Otherwise falls back to `onstop`. Auth token obtained on main thread (needs Firebase SDK), then Worker receives pre-converted buffers + token + Cloud Function URL via `postMessage`. Worker does b64 encode + fetch `recognizeSpeech` Cloud Function with Bearer auth. Main thread is free.
 - Chrome Web Speech API: ~10-20% silent failure rate for single-syllable words. 250ms visual delay on capture start. Has built-in silence detection (no AnalyserNode needed).
 - No browser/UA sniffing — capability detection only.
+
+### Streaming speech recognition (`src/lib/stt-streaming.js`) — IN PROGRESS
+- **Architecture:** AudioWorklet captures raw PCM → downsamples to 16kHz Int16 → streams over WebSocket → server pipes to Google `streamingRecognize` → final result back over WS. Bypasses MediaRecorder entirely — no blobs, no `arrayBuffer()`, no Safari stall.
+- **Client:** `recognizeWithStreamingSTT(lang)` — returns identical interface to `recognizeWithCloudSTT()`: Promise with `.ctrl` object (`stop`, `cancel`, `updateMeter`, `log`). Drop-in replacement.
+- **AudioWorklet:** `public/pcm-processor.js` runs in audio thread. Downsamples from native rate (48kHz) to 16kHz via linear interpolation. Converts Float32→Int16. Buffers ~200ms (3200 samples) before posting. Supports `flush` command to send remaining buffer on stop.
+- **WebSocket server:** `streaming-stt-server/server.js` — Node.js HTTP server with `ws` library. Verifies Firebase auth token on upgrade. Creates Google Speech `streamingRecognize` session per connection. Config: LINEAR16, 16kHz, `singleUtterance: true`, `interimResults: false` (interim transcripts parked for later). Pipes binary WS messages to recognizeStream. Sends `{type:'final'}`, `{type:'end_of_utterance'}`, or `{type:'error'}` back.
+- **Parallel setup:** Auth+WS connect, AudioWorklet module load, and `getUserMedia` all run in parallel via `Promise.all`. Reduces setup from ~3.5s serial to ~200-300ms.
+- **Silence detection:** Client-side AnalyserNode (same thresholds as batch: speech RMS > 4, silence RMS < 2, 650ms silence after 200ms+ speech). On silence: flushes AudioWorklet buffer, sends `{type:'stop'}` to server after 50ms delay, server ends Google stream. Does not rely on Google's sluggish `singleUtterance` detection.
+- **Toggle:** Settings page "Streaming Voice" toggle (localStorage `wordHunter_streamingSTT`). Default on. Falls back to batch if AudioWorkletNode not available. Only visible when `getSpeechMethod() === 'cloudSTT'`.
+- **Deployment:** Server needs Cloud Run (Firebase Cloud Functions don't support WebSockets). Dockerfile in `streaming-stt-server/`. Service account credentials required (`@google-cloud/speech` SDK calls Google directly, not via API key).
+- **Status:** Working locally via Vite HTTPS proxy. Not yet deployed to Cloud Run. `CF_URLS.streamingSTT` set to `'__WS_AUTO__'` (resolved at runtime: dev uses Vite proxy, production will use `wss://...` Cloud Run URL).
+- **Known issues:** Setup time still ~2s on second capture (WS reconnect). Google's confidence on short English words is low (~11-63%). Needs iPhone Safari testing after Cloud Run deployment.
 
 ### Safari mobile capture — platform constraints (do not change without re-reading)
 
@@ -146,7 +159,8 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 ### What's known broken or incomplete
 - Practice mode is a placeholder — no real quiz/SRS logic yet
 - Speech recognition has inherent ~10-20% failure rate on Chrome (Web Speech API limitation)
-- Cloud STT has ~1s latency + variable recording window (no streaming)
+- Streaming STT (AudioWorklet + WebSocket) working locally but not deployed to Cloud Run yet
+- Batch Cloud STT has ~1s latency + variable recording window
 - Very long words (10+ morae) may need horizontal scroll in pitch display
 - Service worker caches aggressively — users may need `?v=N` param to bust cache on updates
 - Firestore security rules not yet deployed (Step 5)
@@ -554,7 +568,14 @@ cache/
 
 ## STT Latency Research Backlog
 
-- **Raw PCM (LINEAR16) vs WebM to Google STT** — Test whether sending raw PCM audio affects Google API response times vs current WebM/Opus. Would require AudioWorklet to capture raw samples (bypasses MediaRecorder entirely — no blobs, no arrayBuffer). Also eliminates Safari's slow blob unwrapping problem at the source. Research note: no published benchmarks found comparing format → API latency; Google docs say format affects accuracy/bandwidth, not response speed. Worth testing empirically with our own capture logs since the `api=` timing in our pipeline log isolates Google round-trip exactly.
+- **Raw PCM (LINEAR16) vs WebM to Google STT** — ✅ IMPLEMENTED via streaming STT (AudioWorklet + WebSocket + `streamingRecognize`). Bypasses MediaRecorder entirely — no blobs, no `arrayBuffer()`. Eliminates Safari's slow blob unwrapping. Initial local testing shows it works but total latency is still high (~6-7s) due to setup time + Google processing. Needs Cloud Run deployment and iPhone Safari testing to get real-world numbers.
+- **Streaming STT remaining work:**
+  - Deploy WebSocket server to Cloud Run
+  - Update `CF_URLS.streamingSTT` to production `wss://` URL
+  - Test on iPhone Safari (primary target)
+  - Tune silence detection thresholds for streaming (may differ from batch)
+  - Enable `interimResults: true` for live interim transcripts (parked until core is stable)
+  - Investigate second-capture setup time (~2s for WS reconnect)
 
 ---
 
@@ -582,7 +603,8 @@ cache/
 | `src/App.jsx` | Root component, auth state, nav, routing |
 | `src/main.jsx` | Vite entry point |
 | `src/config/firebase.js` | Firebase init, auth, Cloud Function URLs, `getAuthToken()` |
-| `src/lib/stt.js` | Cloud STT: `recognizeWithCloudSTT()`, `getSpeechMethod()`, silence detection, Worker pipeline |
+| `src/lib/stt.js` | Batch Cloud STT: `recognizeWithCloudSTT()`, `getSpeechMethod()`, silence detection, Worker pipeline |
+| `src/lib/stt-streaming.js` | Streaming STT: `recognizeWithStreamingSTT()`, AudioWorklet + WebSocket pipeline |
 | `src/lib/api.js` | `callCloudFunction()`, `fetchCoreData()`, `fetchPitchAndSentences()`, `fetchKanjiDetails()`, `resolveEnglishToJapanese()`, `playGoogleTTS()` |
 | `src/lib/pitch.js` | Pitch accent logic: `splitIntoMorae()`, `downstepToPitchArray()`, `sanitizePitch()` |
 | `src/lib/wordStore.js` | `WordStore` — localStorage word data CRUD |
@@ -603,6 +625,10 @@ cache/
 | `vite.config.js` | Vite build config |
 | `package.json` | Dependencies, `npm run build` script |
 | `dist/` | Build output (gitignored), deployed to GitHub Pages |
+| `public/pcm-processor.js` | AudioWorklet processor: downsamples to 16kHz, Float32→Int16 PCM conversion |
+| `streaming-stt-server/` | WebSocket server for streaming STT (Cloud Run deployment) |
+| `streaming-stt-server/server.js` | WS server: Firebase auth + Google Speech streamingRecognize bridge |
+| `streaming-stt-server/Dockerfile` | Cloud Run container definition |
 
 ### Legacy & reference
 

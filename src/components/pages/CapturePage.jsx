@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { firebaseAuth } from '../../config/firebase';
 import { getSpeechMethod, recognizeWithCloudSTT } from '../../lib/stt';
-import { getStoredDefaultLang, setStoredDefaultLang, incLifetimeCaptures } from '../../lib/storage';
+import { recognizeWithStreamingSTT } from '../../lib/stt-streaming';
+import { getStoredDefaultLang, setStoredDefaultLang, incLifetimeCaptures, getStreamingSTTEnabled } from '../../lib/storage';
 import { resolveEnglishToJapanese } from '../../lib/api';
 import VoiceTipModal from '../VoiceTipModal';
 
@@ -38,6 +39,7 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
   const gotFinalRef = useRef(false);
   const lastInterimRef = useRef('');
   const [listeningReady, setListeningReady] = useState(false);
+  const [needsGesture, setNeedsGesture] = useState(false);
   const handleTipDismiss = useCallback(() => { setShowTipModal(false); }, []);
 
   const miniDict = useRef({
@@ -172,6 +174,7 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
   };
 
   const startListening = useCallback(() => {
+    setNeedsGesture(false);
     stopCurrentRecognition();
     captureGenRef.current++;
     const thisGen = captureGenRef.current;
@@ -207,11 +210,14 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
         return;
       }
 
-      capLog(`📱 Using Cloud STT (${recognizerLang})`);
+      const useStreaming = getStreamingSTTEnabled() && typeof AudioWorkletNode !== 'undefined';
+      capLog(`📱 Using ${useStreaming ? 'Streaming' : 'Batch'} Cloud STT (${recognizerLang})`);
       recStartTimeRef.current = Date.now();
       gotFinalRef.current = false;
 
-      const sttPromise = recognizeWithCloudSTT(recognizerLang);
+      const sttPromise = useStreaming
+        ? recognizeWithStreamingSTT(recognizerLang)
+        : recognizeWithCloudSTT(recognizerLang);
       activeRecRef.current = { stop: () => sttPromise.ctrl?.stop?.(), abort: () => sttPromise.ctrl?.cancel?.(), ctrl: sttPromise.ctrl };
 
       sttPromise.ctrl.updateMeter = (pct, color) => {
@@ -254,7 +260,12 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
         if (captureGenRef.current !== thisGen) { capLog('↩ Stale CloudSTT error discarded'); return; }
         if (gotFinalRef.current) { capLog('↩ CloudSTT cancelled (intentional)'); return; }
         capLog(`❌ CloudSTT error: ${err.message}`, 'error');
-        if (err.message === 'mic-denied') {
+        if (err.message === 'audio-context-suspended') {
+          // iOS Safari: AudioContext needs a user gesture. Stay in listening state, show tap-to-start UI.
+          setStatus('listening');
+          setListeningReady(true);
+          setNeedsGesture(true);
+        } else if (err.message === 'mic-denied') {
           setStatus('manual');
           setErrorMessage("Mic unavailable. Type instead:");
         } else {
@@ -555,23 +566,26 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
 
       {status === 'listening' && (
         <>
-          <div onClick={() => { if (speechMethod === 'cloudSTT' && activeRecRef.current) { capLog('👆 Tap to submit'); activeRecRef.current.stop(); } }}
-            style={{ width: '120px', height: '120px', borderRadius: '50%', background: isJaMode ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: listeningReady ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: listeningReady ? 1 : 0.25, cursor: speechMethod === 'cloudSTT' ? 'pointer' : 'default' }}>
+          <div onClick={() => {
+            if (needsGesture) { startListening(); }
+            else if (speechMethod === 'cloudSTT' && activeRecRef.current) { capLog('👆 Tap to submit'); activeRecRef.current.stop(); }
+          }}
+            style={{ width: '120px', height: '120px', borderRadius: '50%', background: isJaMode ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: listeningReady ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: listeningReady ? 1 : 0.25, cursor: (speechMethod === 'cloudSTT' || needsGesture) ? 'pointer' : 'default' }}>
             <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: isJaMode ? '#ff3366' : '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: listeningReady ? 1 : 0.25 }}>
               <div style={{ width: '24px', height: '24px', borderRadius: '4px', background: '#fff' }}/>
             </div>
           </div>
-          <p style={{ marginTop: '28px', fontSize: '18px', fontWeight: '600', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)', transition: 'opacity 0.3s' }}>Recording {isJaMode ? 'Japanese' : 'English'}...</p>
+          <p style={{ marginTop: '28px', fontSize: '18px', fontWeight: '600', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)', transition: 'opacity 0.3s' }}>{needsGesture ? 'Tap to start recording' : `Recording ${isJaMode ? 'Japanese' : 'English'}...`}</p>
           <p style={{ marginTop: '8px', fontSize: '14px', color: 'rgba(255,255,255,0.4)', opacity: listeningReady ? 1 : 0 }}>
-            {isJaMode ? 'Say a word in Japanese' : 'Say a word in English'}
+            {needsGesture ? 'Tap the mic to begin' : (isJaMode ? 'Say a word in Japanese' : 'Say a word in English')}
           </p>
-          {speechMethod === 'cloudSTT' && (
+          {speechMethod === 'cloudSTT' && !needsGesture && (
             <div style={{ marginTop: '16px', width: '160px', height: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '2px', overflow: 'hidden' }}>
               <div ref={volumeBarRef} style={{ height: '100%', borderRadius: '2px', width: '0%', background: 'rgba(255,255,255,0.12)', transition: 'width 0.06s' }}/>
             </div>
           )}
           {transcript && <p style={{ marginTop: '24px', fontSize: '32px', fontWeight: '800', color: '#ffe600' }}>{transcript}</p>}
-          <p style={{ marginTop: '16px', fontSize: '13px', color: 'rgba(255,255,255,0.2)' }}>{timeLeft}s</p>
+          {!needsGesture && <p style={{ marginTop: '16px', fontSize: '13px', color: 'rgba(255,255,255,0.2)' }}>{timeLeft}s</p>}
           <button onClick={() => { capLog('👆 "Type instead" clicked'); gotFinalRef.current = true; stopCurrentRecognition(); setStatus('manual'); setErrorMessage(''); }} style={{
             marginTop: '20px',
             background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
@@ -757,7 +771,7 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
           maxHeight: '40vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.1.5 ({debugLog.length})</span>
+            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.1.6 ({debugLog.length})</span>
             <button onClick={() => setDebugLog([])} style={{ background: 'none', border: 'none', fontSize: '10px', color: '#666', cursor: 'pointer' }}>Clear</button>
           </div>
           {debugLog.map((e, i) => (
