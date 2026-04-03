@@ -577,8 +577,8 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
             if (needsGesture) { setNeedsGesture(false); startListening(); }
             else if (speechMethod === 'cloudSTT' && activeRecRef.current) { capLog('👆 Tap to submit'); activeRecRef.current.stop(); }
           }}
-            style={{ width: '120px', height: '120px', borderRadius: '50%', background: isJaMode ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: listeningReady ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: listeningReady ? 1 : 0.25, cursor: (speechMethod === 'cloudSTT' || needsGesture) ? 'pointer' : 'default' }}>
-            <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: isJaMode ? '#ff3366' : '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: listeningReady ? 1 : 0.25 }}>
+            style={{ width: '120px', height: '120px', borderRadius: '50%', background: needsGesture ? 'rgba(255,255,255,0.08)' : (isJaMode ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)'), display: 'flex', alignItems: 'center', justifyContent: 'center', animation: (listeningReady && !needsGesture) ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: listeningReady ? 1 : 0.25, cursor: (speechMethod === 'cloudSTT' || needsGesture) ? 'pointer' : 'default' }}>
+            <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: needsGesture ? '#555' : (isJaMode ? '#ff3366' : '#3b82f6'), display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: listeningReady ? 1 : 0.25 }}>
               <div style={{ width: '24px', height: '24px', borderRadius: '4px', background: '#fff' }}/>
             </div>
           </div>
