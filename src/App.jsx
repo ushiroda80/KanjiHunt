@@ -11,7 +11,7 @@ import SettingsPage from './components/pages/SettingsPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.1.6 loaded');
+  console.log('[Kanji Hunt] v3.1.5 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
