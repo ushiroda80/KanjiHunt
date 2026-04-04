@@ -84,6 +84,8 @@ wss.on('connection', (ws, req, lang) => {
       encoding: 'LINEAR16',
       sampleRateHertz: 16000,
       languageCode: lang,
+      model: 'command_and_search',
+      useEnhanced: true,
       maxAlternatives: 4,
       enableAutomaticPunctuation: false,
     },

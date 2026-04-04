@@ -217,6 +217,12 @@ export const deleteWords = async (words) => {
   }
 };
 
+// Admin — fetch all users with stats
+export const getAdminUsers = async () => {
+  const data = await callCloudFunction('getAdminUsers', {});
+  return data.users || [];
+};
+
 // Estimate per-mora timing from total audio duration
 export const getMoraTimings = (pitchAccent, totalDuration) => {
   if (!pitchAccent || pitchAccent.length === 0) return [];

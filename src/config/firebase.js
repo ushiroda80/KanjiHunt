@@ -31,6 +31,7 @@ export const CF_URLS = {
   saveWord: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/saveWord',
   updateWordField: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/updateWordField',
   deleteWords: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/deleteWords',
+  getAdminUsers: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/getAdminUsers',
   // Streaming STT WebSocket server (Cloud Run)
   // Dev: routes through Vite proxy (vite.config.js /ws-stt → ws://localhost:8080)
   // Prod: direct wss:// to Cloud Run service
@@ -43,5 +44,7 @@ export const CF_URLS = {
 export async function getAuthToken() {
   const user = firebaseAuth.currentUser;
   if (!user) throw new Error('not-signed-in');
-  return await user.getIdToken();
+  const token = await user.getIdToken();
+  console.log(`🎫 Token for: ${user.uid} (${user.email})`);
+  return token;
 }

@@ -8,10 +8,11 @@ import CapturePage from './components/pages/CapturePage';
 import ViewPage from './components/pages/ViewPage';
 import HistoryPage from './components/pages/HistoryPage';
 import SettingsPage from './components/pages/SettingsPage';
+import AdminPage from './components/pages/AdminPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.2.5 loaded');
+  console.log('[Kanji Hunt] v3.2.6 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
@@ -21,6 +22,7 @@ const App = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [defaultLang, setDefaultLang] = useState(() => getStoredDefaultLang());
   const [showSettings, setShowSettings] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [usage, setUsage] = useState(null);
@@ -44,15 +46,22 @@ const App = () => {
     const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
       setFirebaseUser(user);
       setAuthLoading(false);
-      console.log('[Auth]', user ? `Signed in as ${user.email}` : 'Not signed in');
       if (user) {
+        console.log(`🔑 Auth: signed-in as ${user.uid} (${user.email}) → fetching words...`);
         fetchUsage();
         setWordsLoading(true);
         getWords().then(words => {
+          const keys = Object.keys(words);
+          console.log(`🔑 Auth: getWords returned ${keys.length} words for ${user.uid} (${user.email})`);
+          console.log(`📦 Firestore returned: [${keys.slice(0, 10).join(', ')}${keys.length > 10 ? `, ... +${keys.length - 10} more` : ''}]`);
           setWordStore(words);
           setWordsLoading(false);
-        }).catch(() => setWordsLoading(false));
+        }).catch((e) => {
+          console.error(`🔑 Auth: getWords FAILED for ${user.uid}:`, e.message);
+          setWordsLoading(false);
+        });
       } else {
+        console.log('🔑 Auth: signed-out → clearing wordStore');
         setWordStore({});
         setWordsLoading(false);
       }
@@ -111,6 +120,8 @@ const App = () => {
       setWordData(data);
       const updatedData = { ...data, capturedAt: new Date().toISOString() };
       setWordStore(prev => ({ ...prev, [word]: updatedData }));
+      const saveUid = firebaseAuth.currentUser?.uid;
+      console.log(`💾 saveWord("${word}") as ${saveUid} (${firebaseAuth.currentUser?.email}) [existing]`);
       saveWord(word, updatedData);
       console.log(`Word "${word}" loaded from ${source} (timestamp updated)`);
     } else {
@@ -127,6 +138,8 @@ const App = () => {
       setIsLoading(false);
 
       setWordStore(prev => ({ ...prev, [word]: fullData }));
+      const saveUid2 = firebaseAuth.currentUser?.uid;
+      console.log(`💾 saveWord("${word}") as ${saveUid2} (${firebaseAuth.currentUser?.email}) [new]`);
       saveWord(word, fullData);
 
       console.log(`Word "${word}" fully loaded`);
@@ -175,8 +188,12 @@ const App = () => {
     );
   }
 
+  const isAdmin = firebaseUser && firebaseUser.email === 'ushiroda80@gmail.com';
+
   return (
     <div style={{ maxWidth: '430px', margin: '0 auto', minHeight: '100vh', background: '#fff', position: 'relative' }}>
+
+      {showAdmin && <AdminPage onClose={() => setShowAdmin(false)} />}
 
       {showSettings && (
         <SettingsPage
@@ -190,6 +207,8 @@ const App = () => {
           onSignIn={handleSignIn}
           onSignOut={handleSignOut}
           usage={usage}
+          isAdmin={isAdmin}
+          onOpenAdmin={() => { setShowSettings(false); setShowAdmin(true); }}
         />
       )}
 

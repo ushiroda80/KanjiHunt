@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { getTipsEnabled, setTipsEnabled, getTipsPermanentlyDismissed, setTipsPermanentlyDismissed, setTipTriggerCount, getStreamingSTTEnabled, setStreamingSTTEnabled } from '../../lib/storage';
 import { getPitchDBMeta, getJlptDBMeta, getReadingsDBMeta, importPitchDB } from '../../lib/databases';
 
-const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinnedWords, onDeleteUnpinned, firebaseUser, onSignIn, onSignOut, usage }) => {
+const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinnedWords, onDeleteUnpinned, firebaseUser, onSignIn, onSignOut, usage, isAdmin, onOpenAdmin }) => {
   const [selectedLang, setSelectedLang] = useState(defaultLang);
   const [tipsOn, setTipsOn] = useState(() => getTipsEnabled() && !getTipsPermanentlyDismissed());
   const [streamingOn, setStreamingOn] = useState(() => getStreamingSTTEnabled());
@@ -54,7 +54,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
           <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
         </div>
-        <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.2.5 · Hatake Development</div>
+        <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.2.6 · Hatake Development</div>
 
         <SGroup label="Preferences" />
         <SCard>
@@ -205,6 +205,17 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
             right={<button onClick={() => { if (confirm('Delete all unpinned words?')) onDeleteUnpinned(); }} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#fee2e2', color: '#991b1b', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Delete</button>}
           />
         </SCard>
+
+        {isAdmin && (
+          <>
+            <SGroup label="Admin" />
+            <SCard>
+              <SRow icon="👑" iconColor="#fef3c7" label="Admin Dashboard" sub="View all users and stats"
+                right={<button onClick={onOpenAdmin} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#ffe600', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Open</button>}
+              />
+            </SCard>
+          </>
+        )}
 
         <SGroup label="About" />
         <SCard>
