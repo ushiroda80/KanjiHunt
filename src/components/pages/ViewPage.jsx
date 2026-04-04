@@ -2,7 +2,7 @@ import React from 'react';
 import { firebaseAuth } from '../../config/firebase';
 import WordCard from '../WordCard';
 
-const ViewPage = ({ word, onNewCapture, onCaptureKanji, isLoading, onRetry, isPinned, onTogglePin }) => (
+const ViewPage = ({ word, onNewCapture, onCaptureKanji, isLoading, onRetry, isPinned, onTogglePin, isAdmin }) => (
   <div style={{
     padding: '16px', paddingTop: '24px', paddingBottom: '100px', minHeight: '100vh',
     background: '#fafafa',
@@ -49,7 +49,7 @@ const ViewPage = ({ word, onNewCapture, onCaptureKanji, isLoading, onRetry, isPi
             )}
           </div>
         )}
-        {word && <WordCard word={word} onCaptureKanji={onCaptureKanji} isPinned={isPinned} onTogglePin={onTogglePin} />}
+        {word && <WordCard word={word} onCaptureKanji={onCaptureKanji} isPinned={isPinned} onTogglePin={onTogglePin} isAdmin={isAdmin} />}
       </>
     )}
   </div>

@@ -40,7 +40,7 @@ const JlptBadge = ({ jlpt, color }) => {
   );
 };
 
-const WordCard = ({ word, onCaptureKanji, isPinned, onTogglePin }) => {
+const WordCard = ({ word, onCaptureKanji, isPinned, onTogglePin, isAdmin }) => {
   const [activeTab, setActiveTab] = useState('define');
   const [showPinToast, setShowPinToast] = useState(false);
   const [showRubyDebug, setShowRubyDebug] = useState(false);
@@ -79,7 +79,7 @@ const WordCard = ({ word, onCaptureKanji, isPinned, onTogglePin }) => {
         boxShadow: '0 2px 12px rgba(0,0,0,0.08)'
       }}>
         <JlptBadge jlpt={word.jlpt} color={jlptBadgeColor} />
-        <div
+        {isAdmin && <div
           onClick={() => setShowRubyDebug(!showRubyDebug)}
           style={{
             position: 'absolute', top: '-1px', left: '21px', zIndex: 10,
@@ -89,7 +89,7 @@ const WordCard = ({ word, onCaptureKanji, isPinned, onTogglePin }) => {
             cursor: 'pointer',
             transition: 'background 0.15s ease',
           }}
-        />
+        />}
         {onTogglePin && (
           <React.Fragment>
           <div
@@ -119,7 +119,7 @@ const WordCard = ({ word, onCaptureKanji, isPinned, onTogglePin }) => {
         )}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
           <RubyDisplay rubyParts={word.rubyParts} kanji={displayKanji} hiragana={word.hiragana} fontSize={kanjiSize} />
-          {showRubyDebug && (
+          {isAdmin && showRubyDebug && (
             <div style={{
               position: 'absolute', top: '100%', left: '0', right: '0', zIndex: 20,
               background: '#1a1a1a', borderRadius: '8px', padding: '10px',

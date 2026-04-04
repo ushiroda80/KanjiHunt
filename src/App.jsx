@@ -12,7 +12,7 @@ import AdminPage from './components/pages/AdminPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.2.7 loaded');
+  console.log('[Kanji Hunt] v3.2.8 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
@@ -220,7 +220,7 @@ const App = () => {
 
       {activeSection === 'capture' && (
         firebaseUser
-          ? <CapturePage key={captureResetKey} onCapture={handleCapture} defaultLang={defaultLang} usage={usage} />
+          ? <CapturePage key={captureResetKey} onCapture={handleCapture} defaultLang={defaultLang} usage={usage} isAdmin={isAdmin} />
           : <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#1a1a2e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ textAlign: 'center' }}>
                 <span style={{ fontSize: '48px' }}>🔒</span>
@@ -231,7 +231,7 @@ const App = () => {
             </div>
       )}
       {activeSection === 'history' && <HistoryPage wordStore={wordStore} wordsLoading={wordsLoading} onSelectWord={handleSelectFromHistory} pinnedWords={pinnedWords} onTogglePin={togglePin} />}
-      {activeSection === 'view' && (wordData || isLoading) && <ViewPage word={wordData} onNewCapture={handleNewCapture} onCaptureKanji={handleCapture} isLoading={isLoading} onRetry={() => capturedWord && handleCapture(capturedWord)} isPinned={wordData && pinnedWords.has(wordData.kanji)} onTogglePin={togglePin} />}
+      {activeSection === 'view' && (wordData || isLoading) && <ViewPage word={wordData} onNewCapture={handleNewCapture} onCaptureKanji={handleCapture} isLoading={isLoading} onRetry={() => capturedWord && handleCapture(capturedWord)} isPinned={wordData && pinnedWords.has(wordData.kanji)} onTogglePin={togglePin} isAdmin={isAdmin} />}
       {activeSection === 'view' && !wordData && !isLoading && (
         <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ textAlign: 'center', color: '#888' }}>

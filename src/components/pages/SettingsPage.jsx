@@ -54,7 +54,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
           <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
         </div>
-        <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.2.7 · Hatake Development</div>
+        <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.2.8 · Hatake Development</div>
 
         <SGroup label="Preferences" />
         <SCard>
@@ -72,7 +72,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
               </div>
             }
           />
-          <SRow icon="🎙️" iconColor="#e0e7ff" label="Streaming STT" sub="Lower latency voice capture (requires AudioWorklet)"
+          {isAdmin && <SRow icon="🎙️" iconColor="#e0e7ff" label="Streaming STT" sub="Lower latency voice capture (requires AudioWorklet)"
             right={
               <div onClick={() => { const v = !streamingOn; setStreamingOn(v); setStreamingSTTEnabled(v); }} style={{
                 width: '44px', height: '26px', borderRadius: '13px', cursor: 'pointer',
@@ -85,7 +85,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
                 }}/>
               </div>
             }
-          />
+          />}
         </SCard>
 
         <SGroup label="Account" />
@@ -114,10 +114,12 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
                     strokeLinecap="round" transform="rotate(-90 18 18)"/>
                 </svg>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '18px', fontWeight: '700', color: '#1a1a2e' }}>
-                    {usage.used} <span style={{ fontSize: '12px', fontWeight: '500', color: '#888' }}>/ {usage.limit}</span>
+                  <div style={{ fontSize: '13px', fontWeight: '500', color: '#888' }}>
+                    Captures used this month
                   </div>
-                  <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>Captures this month</div>
+                  <div style={{ fontSize: '18px', fontWeight: '700', color: '#1a1a2e', marginTop: '2px' }}>
+                    {Math.max(0, usage.limit - usage.used)} <span style={{ fontSize: '12px', fontWeight: '500', color: '#888' }}>Captures remaining</span>
+                  </div>
                   <div style={{ height: '4px', background: '#f0f0f0', borderRadius: '2px', marginTop: '6px', overflow: 'hidden' }}>
                     <div style={{ height: '4px', borderRadius: '2px', width: Math.min(100, usage.used / usage.limit * 100) + '%', background: usage.used >= usage.limit ? '#E24B4A' : '#ffe600' }}/>
                   </div>
@@ -136,7 +138,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
           </>
         )}
 
-        <SGroup label="Databases" />
+        {isAdmin && <><SGroup label="Databases" />
         <SCard>
           <SRow icon="📚" iconColor={pitchMeta ? '#d1fae5' : '#f0f0f0'} label="Pitch Accent" sub={pitchMeta ? `${pitchMeta.count.toLocaleString()} words loaded` : 'Not loaded'}
             right={pitchMeta
@@ -197,7 +199,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
                 }} style={{ padding: '5px 12px', fontSize: '11px', fontWeight: '700', background: '#ffe600', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>Load</button>
             }
           />
-        </SCard>
+        </SCard></>}
 
         <SGroup label="Data" />
         <SCard>
