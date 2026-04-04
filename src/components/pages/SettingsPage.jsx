@@ -8,17 +8,6 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
   const [streamingOn, setStreamingOn] = useState(() => getStreamingSTTEnabled());
   const [saved, setSaved] = useState(false);
 
-  const handleSave = () => {
-    onSaveDefaultLang(selectedLang);
-    setTipsEnabled(tipsOn);
-    if (tipsOn) {
-      setTipsPermanentlyDismissed(false);
-      setTipTriggerCount(0);
-    }
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
   const pitchMeta = getPitchDBMeta();
   const jlptMeta = getJlptDBMeta();
   const readingsMeta = getReadingsDBMeta();
@@ -60,7 +49,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
         <SCard>
           <SRow icon="💡" iconColor="#fef3c7" label="Voice Tips" sub="Show tips when voice recognition struggles"
             right={
-              <div onClick={() => setTipsOn(!tipsOn)} style={{
+              <div onClick={() => { const v = !tipsOn; setTipsOn(v); setTipsEnabled(v); if (v) { setTipsPermanentlyDismissed(false); setTipTriggerCount(0); } }} style={{
                 width: '44px', height: '26px', borderRadius: '13px', cursor: 'pointer',
                 background: tipsOn ? '#4ade80' : '#ddd', position: 'relative', transition: 'background 0.2s', flexShrink: 0
               }}>
@@ -221,14 +210,6 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
           </div>
         </SCard>
 
-        <button onClick={handleSave} style={{
-          width: '100%', padding: '14px', fontSize: '14px', fontWeight: '700', marginTop: '24px',
-          background: saved ? '#d1fae5' : '#ffe600',
-          color: saved ? '#166534' : '#000',
-          border: 'none', borderRadius: '12px', cursor: 'pointer'
-        }}>
-          {saved ? '✓ Saved!' : 'Save Changes'}
-        </button>
       </div>
     </div>
   );
