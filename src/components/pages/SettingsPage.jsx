@@ -117,7 +117,6 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
                   <div style={{ fontSize: '18px', fontWeight: '700', color: '#1a1a2e' }}>
                     {usage.used} <span style={{ fontSize: '12px', fontWeight: '500', color: '#888' }}>/ {usage.limit}</span>
                   </div>
-                  <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>{usage.used} captures this month, {Math.max(0, usage.limit - usage.used)} remaining</div>
                   <div style={{ height: '4px', background: '#f0f0f0', borderRadius: '2px', marginTop: '6px', overflow: 'hidden' }}>
                     <div style={{ height: '4px', borderRadius: '2px', width: Math.min(100, usage.used / usage.limit * 100) + '%', background: usage.used >= usage.limit ? '#E24B4A' : '#ffe600' }}/>
                   </div>
@@ -125,11 +124,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
               </div>
               <div style={{ padding: '0 16px 12px' }}>
                 <div style={{ fontSize: '10px', color: '#bbb' }}>
-                  Resets {(() => {
-                    const now = new Date();
-                    const reset = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-                    return reset.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
-                  })()}
+                  {usage.used} captures this month, {Math.max(0, usage.limit - usage.used)} remaining
                 </div>
               </div>
             </SCard>
