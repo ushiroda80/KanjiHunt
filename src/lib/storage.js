@@ -22,3 +22,7 @@ export function getTipsPermanentlyDismissed() { return localStorage.getItem(TIP_
 export function setTipsPermanentlyDismissed(v) { localStorage.setItem(TIP_KEYS.permanentDismiss, String(v)); }
 export function getTipsEnabled() { const v = localStorage.getItem(TIP_KEYS.tipsEnabled); return v === null ? true : v === 'true'; }
 export function setTipsEnabled(v) { localStorage.setItem(TIP_KEYS.tipsEnabled, String(v)); }
+
+// Streaming STT preference (default: true — streaming is the default for cloudSTT users)
+export function getStreamingSTTEnabled() { const v = localStorage.getItem('wordHunter_streamingSTT'); return v === null ? true : v === 'true'; }
+export function setStreamingSTTEnabled(v) { localStorage.setItem('wordHunter_streamingSTT', String(v)); }

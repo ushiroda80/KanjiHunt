@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { firebaseAuth } from '../../config/firebase';
 import { getSpeechMethod, recognizeWithCloudSTT } from '../../lib/stt';
-import { getStoredDefaultLang, setStoredDefaultLang, incLifetimeCaptures } from '../../lib/storage';
+import { recognizeWithStreamingSTT } from '../../lib/stt-streaming';
+import { getStoredDefaultLang, setStoredDefaultLang, incLifetimeCaptures, getStreamingSTTEnabled } from '../../lib/storage';
 import { resolveEnglishToJapanese } from '../../lib/api';
 import VoiceTipModal from '../VoiceTipModal';
 
@@ -218,11 +219,14 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
         return;
       }
 
-      capLog(`📱 Using Cloud STT (${recognizerLang})`);
+      const useStreaming = getStreamingSTTEnabled() && typeof AudioWorklet !== 'undefined';
+      capLog(`📱 Using ${useStreaming ? 'Streaming' : 'Batch'} STT (${recognizerLang})`);
       recStartTimeRef.current = Date.now();
       gotFinalRef.current = false;
 
-      const sttPromise = recognizeWithCloudSTT(recognizerLang);
+      const sttPromise = useStreaming
+        ? recognizeWithStreamingSTT(recognizerLang)
+        : recognizeWithCloudSTT(recognizerLang);
       activeRecRef.current = { stop: () => sttPromise.ctrl?.stop?.(), abort: () => sttPromise.ctrl?.cancel?.(), ctrl: sttPromise.ctrl };
 
       sttPromise.ctrl.updateMeter = (pct, color) => {
@@ -778,7 +782,7 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
           maxHeight: '40vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.1.6 ({debugLog.length})</span>
+            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.2.0 ({debugLog.length})</span>
             <button onClick={() => setDebugLog([])} style={{ background: 'none', border: 'none', fontSize: '10px', color: '#666', cursor: 'pointer' }}>Clear</button>
           </div>
           {debugLog.map((e, i) => (

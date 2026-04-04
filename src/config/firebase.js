@@ -25,7 +25,13 @@ export const CF_URLS = {
   resolveEnglish: 'https://resolveenglish-paobljo2bq-an.a.run.app',
   recognizeSpeech: 'https://recognizespeech-paobljo2bq-an.a.run.app',
   synthesizeSpeech: 'https://synthesizespeech-paobljo2bq-an.a.run.app',
-  getUsage: 'https://getusage-paobljo2bq-an.a.run.app'
+  getUsage: 'https://getusage-paobljo2bq-an.a.run.app',
+  // Streaming STT WebSocket server (Cloud Run)
+  // Dev: routes through Vite proxy (vite.config.js /ws-stt → ws://localhost:8080)
+  // Prod: direct wss:// to Cloud Run service
+  streamingSTT: import.meta.env.DEV
+    ? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws-stt`
+    : 'wss://kanji-hunt-streaming-stt-443591225699.asia-northeast1.run.app'
 };
 
 // Get fresh auth token (auto-refreshes if expired)
