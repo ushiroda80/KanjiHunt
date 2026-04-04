@@ -12,7 +12,7 @@ import AdminPage from './components/pages/AdminPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.2.6 loaded');
+  console.log('[Kanji Hunt] v3.2.7 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
@@ -50,13 +50,19 @@ const App = () => {
         console.log(`🔑 Auth: signed-in as ${user.uid} (${user.email}) → fetching words...`);
         fetchUsage();
         setWordsLoading(true);
+        const expectedUid = user.uid;
         getWords().then(words => {
+          if (firebaseAuth.currentUser?.uid !== expectedUid) {
+            console.warn(`🔑 Auth: discarding getWords result — user changed (was ${expectedUid}, now ${firebaseAuth.currentUser?.uid})`);
+            return;
+          }
           const keys = Object.keys(words);
           console.log(`🔑 Auth: getWords returned ${keys.length} words for ${user.uid} (${user.email})`);
           console.log(`📦 Firestore returned: [${keys.slice(0, 10).join(', ')}${keys.length > 10 ? `, ... +${keys.length - 10} more` : ''}]`);
           setWordStore(words);
           setWordsLoading(false);
         }).catch((e) => {
+          if (firebaseAuth.currentUser?.uid !== expectedUid) return;
           console.error(`🔑 Auth: getWords FAILED for ${user.uid}:`, e.message);
           setWordsLoading(false);
         });
