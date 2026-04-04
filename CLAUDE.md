@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.2.3 · April 2026*
+*v3.2.4 · April 2026*
 
 ---
 
