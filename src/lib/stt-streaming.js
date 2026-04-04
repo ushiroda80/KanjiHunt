@@ -30,8 +30,14 @@ export function recognizeWithStreamingSTT(lang) {
     var ws = null;
     var stopTimer = null;
     var finalTimer = null;
+    var t0 = Date.now(); // absolute start (tap mic)
     var setupDoneT0 = 0;
     var lastAudioAt = 0;
+    var speechStartAt = 0; // first time volume crosses speech threshold
+    var speechEndAt = 0; // last moment of speech (updated continuously while loud)
+    var speechEndLogged = false; // only log "speech ended" once
+    var endOfUtteranceAt = 0; // when Google says "you're done talking"
+    var firstChunkAt = 0; // first audio chunk sent to server
 
     function cleanup() {
       clearTimeout(stopTimer);
@@ -67,7 +73,8 @@ export function recognizeWithStreamingSTT(lang) {
       if (audioCtx.state === 'suspended') await audioCtx.resume();
       await audioCtx.audioWorklet.addModule(import.meta.env.BASE_URL + 'pcm-processor.js');
 
-      logMsg('🔊 AudioCtx: ' + audioCtx.state + ', ' + audioCtx.sampleRate + 'Hz');
+      logMsg('🎙 Mic ready (' + (Date.now() - t0) + 'ms)');
+      logMsg('🔊 Audio engine ready (' + audioCtx.sampleRate + 'Hz)');
       if (cancelled) { cleanup(); return; }
 
       // Connect WebSocket to streaming STT server
@@ -78,7 +85,7 @@ export function recognizeWithStreamingSTT(lang) {
       // Wait for WebSocket to open
       await new Promise(function(res, rej) {
         ws.onopen = function() {
-          logMsg('🔌 WS connected (' + (Date.now() - wsConnectT0) + 'ms)');
+          logMsg('🔌 Server connected (' + (Date.now() - wsConnectT0) + 'ms)');
           res();
         };
         ws.onerror = function() { rej(new Error('stt-network-error')); };
@@ -93,20 +100,27 @@ export function recognizeWithStreamingSTT(lang) {
         try {
           var msg = JSON.parse(e.data);
           if (msg.type === 'end_of_utterance') {
-            logMsg('🔇 End of utterance');
+            endOfUtteranceAt = Date.now();
+            var waitMs = speechEndAt ? (endOfUtteranceAt - speechEndAt) : 0;
+            logMsg('🔇 Google says done' + (waitMs ? ' (' + waitMs + 'ms after you stopped)' : ''));
             return;
           }
           if (msg.type === 'final') {
             finalReceived = true;
-            var apiMs = lastAudioAt ? (Date.now() - lastAudioAt) : 0;
-            var captureMs = lastAudioAt ? (lastAudioAt - setupDoneT0) : 0;
-            logMsg('✅ Streaming final: "' + msg.transcript + '" (' + Math.round((msg.confidence || 0) * 100) + '%, api: ' + apiMs + 'ms)');
+            var now = Date.now();
+            var setupMs = setupDoneT0 - t0;
+            var speakingMs = (speechStartAt && speechEndAt) ? (speechEndAt - speechStartAt) : 0;
+            var googleThinkMs = (speechEndAt && endOfUtteranceAt) ? (endOfUtteranceAt - speechEndAt) : (speechEndAt ? (now - speechEndAt) : 0);
+            var resultMs = endOfUtteranceAt ? (now - endOfUtteranceAt) : 0;
+            var totalMs = now - t0;
+            logMsg('✅ Result: "' + msg.transcript + '" (' + Math.round((msg.confidence || 0) * 100) + '%)');
+            logMsg('📊 TOTAL: ' + totalMs + 'ms (setup ' + setupMs + 'ms + speaking ' + speakingMs + 'ms + Google thinking ' + googleThinkMs + 'ms + result ' + resultMs + 'ms)');
             cleanup();
             resolve({
               transcript: msg.transcript || '',
               alternatives: msg.alternatives || [],
               confidence: msg.confidence || 0,
-              timing: { captureMs: captureMs, packMs: 0, apiMs: apiMs }
+              timing: { streaming: true, setupMs: setupMs, speakingMs: speakingMs, googleThinkMs: googleThinkMs, resultMs: resultMs, totalMs: totalMs }
             });
           }
           if (msg.type === 'error') {
@@ -156,6 +170,19 @@ export function recognizeWithStreamingSTT(lang) {
           ctrl.updateMeter(pct, rms > SPEECH_RMS ? '#ffe600' : 'rgba(255,255,255,0.15)');
         }
 
+        // Track when you start and stop speaking (for timing log only — no behavior change)
+        if (rms > SPEECH_RMS) {
+          if (!speechStartAt) {
+            speechStartAt = Date.now();
+            logMsg('🗣 Speech detected (' + (speechStartAt - setupDoneT0) + 'ms into recording)');
+          }
+          speechEndAt = Date.now(); // continuously update to track last loud moment
+          speechEndLogged = false;
+        } else if (speechStartAt && !speechEndLogged && rms < 2) {
+          speechEndLogged = true;
+          logMsg('🤫 Speech ended (' + (speechEndAt - speechStartAt) + 'ms of speech)');
+        }
+
         rafId = requestAnimationFrame(meterLoop);
       }
 
@@ -163,6 +190,10 @@ export function recognizeWithStreamingSTT(lang) {
         if (finalReceived || cancelled) return;
         var buffer = e.data; // ArrayBuffer of Int16 PCM (~200ms at 16kHz)
         lastAudioAt = Date.now();
+        if (!firstChunkAt) {
+          firstChunkAt = lastAudioAt;
+          logMsg('▶️ First audio sent to Google (' + (firstChunkAt - setupDoneT0) + 'ms after setup)');
+        }
 
         // Stream raw PCM to server as binary message
         if (ws && ws.readyState === 1) {
@@ -172,7 +203,7 @@ export function recognizeWithStreamingSTT(lang) {
 
       setupDoneT0 = Date.now();
       rafId = requestAnimationFrame(meterLoop);
-      logMsg('▶️ Streaming');
+      logMsg('▶️ Listening (setup took ' + (setupDoneT0 - t0) + 'ms)');
 
       // Hard cap — send stop after MAX_MS even if Google hasn't auto-detected silence
       stopTimer = setTimeout(function() {

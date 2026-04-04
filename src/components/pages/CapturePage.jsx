@@ -245,11 +245,16 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
         if (result.timing) {
           const t = result.timing;
           const displayStart = Date.now();
-          const total = elapsed;
-          capLog(`📊 CAPTURE SUMMARY — Total: ${total}ms`);
-          capLog(`   🎙 Capture: ${t.captureMs}ms (mic init → silence end)`);
-          capLog(`   📦 Package: ${t.packMs}ms (audio encode → send to Google)`);
-          capLog(`   🌐 API: ${t.apiMs}ms (Google STT round-trip)`);
+          if (t.streaming) {
+            // Streaming logs its own 📊 summary from stt-streaming.js
+            // Just track display timing here
+          } else {
+            const total = elapsed;
+            capLog(`📊 CAPTURE SUMMARY — Total: ${total}ms`);
+            capLog(`   🎙 Capture: ${t.captureMs}ms (mic init → silence end)`);
+            capLog(`   📦 Package: ${t.packMs}ms (audio encode → send to Google)`);
+            capLog(`   🌐 API: ${t.apiMs}ms (Google STT round-trip)`);
+          }
           recStartTimeRef.current = displayStart;
           capLog(`   🖥 Display: (pending render...)`);
         }
@@ -782,7 +787,7 @@ const CapturePage = ({ onCapture, defaultLang, usage }) => {
           maxHeight: '40vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.2.4 ({debugLog.length})</span>
+            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.2.5 ({debugLog.length})</span>
             <button onClick={() => setDebugLog([])} style={{ background: 'none', border: 'none', fontSize: '10px', color: '#666', cursor: 'pointer' }}>Clear</button>
           </div>
           {debugLog.map((e, i) => (
