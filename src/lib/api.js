@@ -175,6 +175,48 @@ export const playGoogleTTS = async (text, speed = 1.0, hiraganaHint = null) => {
   }
 };
 
+// ============================================
+// WORD STORE — per-user Firestore CRUD
+// ============================================
+
+// Fetch all words for the current user
+export const getWords = async () => {
+  try {
+    const data = await callCloudFunction('getWords', {});
+    return data.words || {};
+  } catch (error) {
+    console.error('[getWords] FAILED:', error.message);
+    return {};
+  }
+};
+
+// Upsert a single word document
+export const saveWord = async (word, data) => {
+  try {
+    await callCloudFunction('saveWord', { word, data });
+  } catch (error) {
+    console.error('[saveWord] FAILED:', error.message);
+  }
+};
+
+// Partial update (pin toggle, capturedAt bump)
+export const updateWordField = async (word, fields) => {
+  try {
+    await callCloudFunction('updateWordField', { word, fields });
+  } catch (error) {
+    console.error('[updateWordField] FAILED:', error.message);
+  }
+};
+
+// Batch delete a list of words by kanji key
+export const deleteWords = async (words) => {
+  try {
+    await callCloudFunction('deleteWords', { words });
+  } catch (error) {
+    console.error('[deleteWords] FAILED:', error.message);
+  }
+};
+
 // Estimate per-mora timing from total audio duration
 export const getMoraTimings = (pitchAccent, totalDuration) => {
   if (!pitchAccent || pitchAccent.length === 0) return [];

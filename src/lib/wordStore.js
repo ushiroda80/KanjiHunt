@@ -1,5 +1,6 @@
 // ============================================
-// WORD STORE — localStorage persistence + word data management
+// WORD STORE — word data management (Firestore-backed via App.jsx)
+// Persistence removed from this module — App.jsx calls api.js directly.
 // ============================================
 
 import { firebaseAuth } from '../config/firebase.js';
@@ -85,27 +86,8 @@ const dictionaryData = {
   }
 };
 
-// Word Store — manages captured words with localStorage persistence
+// Word Store — pure data management (no persistence)
 export const WordStore = {
-  STORAGE_KEY: 'wordHunter_capturedWords',
-
-  load: () => {
-    try {
-      const stored = localStorage.getItem(WordStore.STORAGE_KEY);
-      return stored ? JSON.parse(stored) : {};
-    } catch (e) {
-      console.error('Failed to load word store:', e);
-      return {};
-    }
-  },
-
-  save: (words) => {
-    try {
-      localStorage.setItem(WordStore.STORAGE_KEY, JSON.stringify(words));
-    } catch (e) {
-      console.error('Failed to save word store:', e);
-    }
-  },
 
   // Generate rubyParts from kanji string + hiragana reading
   generateRubyParts: (kanji, hiragana) => {
@@ -278,7 +260,8 @@ export const WordStore = {
       capturedAt: data.capturedAt || new Date().toISOString(),
       isPlaceholder: data.isPlaceholder || false,
       isPartial: data.isPartial || false,
-      fetchedAt: data.fetchedAt || null
+      fetchedAt: data.fetchedAt || null,
+      pinned: data.pinned || false
     };
   },
 
@@ -392,18 +375,7 @@ export const WordStore = {
     };
   },
 
-  addWord: (word, data, store) => {
-    const newStore = { ...store, [word]: { ...data, capturedAt: data.capturedAt || new Date().toISOString() } };
-    WordStore.save(newStore);
-    return newStore;
-  },
-
   getAllWords: (store) => {
     return Object.keys(store).map(key => ({ word: key, ...store[key] }));
-  },
-
-  clear: () => {
-    localStorage.removeItem(WordStore.STORAGE_KEY);
-    return {};
   }
 };

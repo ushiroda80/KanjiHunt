@@ -26,6 +26,11 @@ export const CF_URLS = {
   recognizeSpeech: 'https://recognizespeech-paobljo2bq-an.a.run.app',
   synthesizeSpeech: 'https://synthesizespeech-paobljo2bq-an.a.run.app',
   getUsage: 'https://getusage-paobljo2bq-an.a.run.app',
+  // Per-user word list
+  getWords: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/getWords',
+  saveWord: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/saveWord',
+  updateWordField: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/updateWordField',
+  deleteWords: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/deleteWords',
   // Streaming STT WebSocket server (Cloud Run)
   // Dev: routes through Vite proxy (vite.config.js /ws-stt → ws://localhost:8080)
   // Prod: direct wss:// to Cloud Run service

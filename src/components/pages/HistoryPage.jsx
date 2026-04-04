@@ -1,7 +1,19 @@
 import React, { useState } from 'react';
 
-const HistoryPage = ({ wordStore, dictionaryWords, onSelectWord, pinnedWords, onTogglePin }) => {
+const HistoryPage = ({ wordStore, wordsLoading, dictionaryWords, onSelectWord, pinnedWords, onTogglePin }) => {
   const [filter, setFilter] = useState('all');
+
+  if (wordsLoading) {
+    return (
+      <div style={{ padding: '20px', paddingBottom: '100px', minHeight: '100vh', background: '#fafafa', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center', color: '#888' }}>
+          <div style={{ width: '32px', height: '32px', border: '3px solid rgba(0,0,0,0.1)', borderTopColor: '#1a1a2e', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto' }}/>
+          <p style={{ marginTop: '12px', fontSize: '13px' }}>Loading your words…</p>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
 
   const allWords = [];
   Object.keys(wordStore).forEach(key => {

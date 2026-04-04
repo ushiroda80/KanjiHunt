@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.2.0 · April 2026*
+*v3.2.1 · April 2026*
 
 ---
 
@@ -363,6 +363,10 @@ resolveEnglish:       https://resolveenglish-paobljo2bq-an.a.run.app
 recognizeSpeech:      https://recognizespeech-paobljo2bq-an.a.run.app
 synthesizeSpeech:     https://synthesizespeech-paobljo2bq-an.a.run.app
 getUsage:             https://getusage-paobljo2bq-an.a.run.app
+getWords:             https://asia-northeast1-kanji-hunt.cloudfunctions.net/getWords
+saveWord:             https://asia-northeast1-kanji-hunt.cloudfunctions.net/saveWord
+updateWordField:      https://asia-northeast1-kanji-hunt.cloudfunctions.net/updateWordField
+deleteWords:          https://asia-northeast1-kanji-hunt.cloudfunctions.net/deleteWords
 ```
 
 **Firebase project config (public, embedded in client HTML):**
@@ -469,20 +473,47 @@ Step 1 (Firebase setup) → ✅ DONE — project created, Blaze plan, Auth + Fir
 Step 2 (Cloud Functions) → ✅ DONE — 7 functions deployed to asia-northeast1, invoker: "public"
 Step 3 (Client auth + migration) → ✅ DONE — v3.0.0: Firebase Auth + Cloud Function proxy, v3.1.3: STT pipeline stable
 Step 4 (Rate limiting) → ✅ DONE — backend in Step 2, UI in v3.1.0 (badge + Settings card + modal)
-Step 5 (Security rules) → TODO — Firestore rules, ~30 min
+Step 5 (Security rules) → 🔒 DO BEFORE BETA — Firestore rules, ~30 min
 Step 6 (Admin) → TODO — admin Cloud Functions + in-app panel, lower priority
-Step 7 (Cost protection) → TODO — per-API quotas in Google Cloud Console
+Step 7 (Cost protection) → 🔒 DO BEFORE BETA — per-API quotas in Google Cloud Console, ~30 min
 ```
 
-### Phase 4: Smart caching
-**4a. TTS audio cache** — ~1 session
+#### Security checklist (do before inviting any users)
+
+These two items are the only meaningful security gaps at current scale. Both are ~30 minutes and one-time.
+
+| Task | Risk if skipped | Effort |
+|------|----------------|--------|
+| **Step 5: Firestore rules** | Any authenticated user could read/write any other user's data if Firestore is in test mode | 30 min, one-time |
+| **Step 7: API quotas** | A bug or bad actor could run up unlimited Google API charges (budget alerts notify but don't cap) | 30 min, one-time |
+
+**Already handled:**
+- ✅ Firebase auth tokens on every Cloud Function request (Step 2)
+- ✅ Rate limiting per user (Step 4)
+- ✅ Service account key excluded from git via `.gitignore` (v3.2.0)
+- ✅ Dependabot alerts enabled on GitHub for dependency vulnerabilities
+- ✅ No API keys in client code (all server-side in Cloud Functions)
+
+### Phase 4: Per-user word lists
+**4. Personal word lists** — ~2 sessions
+
+*Goal: All logged-in users. Each person has their own vocabulary collection that syncs across devices. Your phone and laptop show the same captured words, pins, and history. Foundation for future SRS/review features.*
+
+- Each user has their own captured words tied to their Firebase account
+- Pin/unpin, history, all per-user
+- Syncs across devices (phone + laptop see same words)
+- Builds on Firebase auth from Phase 3
+- Pinned state merged into word documents (eliminates separate pinnedWords localStorage)
+
+### Phase 5: Smart caching
+**5a. TTS audio cache** — ~1 session
 
 *Goal: All users, cost reduction. Eliminates ~70-80% of API spend. The same word sounds identical every time — no reason to call Google TTS twice for 猫. Users also get faster playback on repeat listens (instant from cache vs ~300ms API round trip).*
 
 - First play of any word+speed → Google TTS API call → store base64 MP3 in Firestore
 - Every subsequent play by any user → serve from cache, zero API cost
 
-**4b. Dictionary cache** — ~1-2 sessions
+**5b. Dictionary cache** — ~1-2 sessions
 
 *Goal: All users, cost reduction + speed. Common words (猫, 東京, 食べる) become instant lookups after the first person captures them. Builds a growing, verified dictionary over time. At 60-70% cache hit rate, cuts Claude API costs by more than half.*
 
@@ -491,15 +522,9 @@ Step 7 (Cost protection) → TODO — per-API quotas in Google Cloud Console
 - Kanjium pitch data always overrides AI pitch in cached entries
 - Schema: `{ kanji, hiragana, definitions, pitchAccent, pitchSource, examples, jlptLevel, rubyParts, lookupCount, createdAt }`
 
-### Phase 5: Per-user word lists
-**5. Personal word lists** — ~1 session
-
-*Goal: All logged-in users. Each person has their own vocabulary collection that syncs across devices. Your phone and laptop show the same captured words, pins, and history. Foundation for future SRS/review features.*
-
-- Each user has their own captured words tied to their Firebase account
-- Pin/unpin, history, all per-user
-- Syncs across devices (phone + laptop see same words)
-- Builds on Firebase auth from Phase 3
+### Phase 6: Security hardening
+**6a. Firestore security rules** — ~30 min (Phase 3, Step 5)
+**6b. API quotas** — ~30 min (Phase 3, Step 7)
 
 ### Data architecture (Firebase)
 
@@ -570,6 +595,24 @@ cache/
 - Sentence mining (capture sentences, extract words)
 - Offline capture with background sync
 - Monetization (subscription model, usage tiers)
+
+---
+
+## NPM Packages
+
+### Dependencies (shipped to users)
+| Package | Version |
+|---------|---------|
+| `firebase` | ^10.12.0 |
+| `react` | ^18.3.1 |
+| `react-dom` | ^18.3.1 |
+
+### Dev dependencies (build tools only)
+| Package | Version |
+|---------|---------|
+| `vite` | ^5.4.0 |
+| `@vitejs/plugin-react` | ^4.3.1 |
+| `@vitejs/plugin-basic-ssl` | ^1.2.0 |
 
 ---
 

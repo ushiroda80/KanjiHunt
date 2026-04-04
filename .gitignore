@@ -2,3 +2,10 @@ node_modules
 dist
 .DS_Store
 .claude/
+
+# Firebase service account keys — NEVER commit these
+kanji-hunt-*.json
+
+# gcloud SDK (installed locally in streaming-stt-server/)
+streaming-stt-server/google-cloud-sdk/
+streaming-stt-server/google-cloud-cli-*.tar.gz

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } from 'firebase/auth';
 import { firebaseAuth } from './config/firebase';
 import { getStoredDefaultLang, setStoredDefaultLang } from './lib/storage';
-import { callCloudFunction } from './lib/api';
+import { callCloudFunction, getWords, saveWord, updateWordField, deleteWords } from './lib/api';
 import { WordStore } from './lib/wordStore';
 import CapturePage from './components/pages/CapturePage';
 import ViewPage from './components/pages/ViewPage';
@@ -11,22 +11,24 @@ import SettingsPage from './components/pages/SettingsPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.2.0 loaded');
+  console.log('[Kanji Hunt] v3.2.1 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
   const [wordData, setWordData] = useState(null);
-  const [wordStore, setWordStore] = useState(() => WordStore.load());
+  const [wordStore, setWordStore] = useState({});
+  const [wordsLoading, setWordsLoading] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [defaultLang, setDefaultLang] = useState(() => getStoredDefaultLang());
   const [showSettings, setShowSettings] = useState(false);
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [usage, setUsage] = useState(null);
-  const [pinnedWords, setPinnedWords] = useState(() => {
-    try { return new Set(JSON.parse(localStorage.getItem('wordHunter_pinnedWords') || '[]')); }
-    catch { return new Set(); }
-  });
+  const pinnedWords = useMemo(() => {
+    const s = new Set();
+    Object.entries(wordStore).forEach(([k, w]) => { if (w.pinned) s.add(k); });
+    return s;
+  }, [wordStore]);
 
   const fetchUsage = useCallback(async () => {
     try {
@@ -43,7 +45,17 @@ const App = () => {
       setFirebaseUser(user);
       setAuthLoading(false);
       console.log('[Auth]', user ? `Signed in as ${user.email}` : 'Not signed in');
-      if (user) fetchUsage();
+      if (user) {
+        fetchUsage();
+        setWordsLoading(true);
+        getWords().then(words => {
+          setWordStore(words);
+          setWordsLoading(false);
+        }).catch(() => setWordsLoading(false));
+      } else {
+        setWordStore({});
+        setWordsLoading(false);
+      }
     });
     return () => unsubscribe();
   }, [fetchUsage]);
@@ -74,12 +86,9 @@ const App = () => {
   };
 
   const togglePin = (word) => {
-    setPinnedWords(prev => {
-      const next = new Set(prev);
-      if (next.has(word)) next.delete(word); else next.add(word);
-      localStorage.setItem('wordHunter_pinnedWords', JSON.stringify([...next]));
-      return next;
-    });
+    const isPinned = pinnedWords.has(word);
+    setWordStore(prev => ({ ...prev, [word]: { ...prev[word], pinned: !isPinned } }));
+    updateWordField(word, { pinned: !isPinned });
   };
 
   const handleSaveDefaultLang = (lang) => {
@@ -101,8 +110,8 @@ const App = () => {
     if (data) {
       setWordData(data);
       const updatedData = { ...data, capturedAt: new Date().toISOString() };
-      const newStore = WordStore.addWord(word, updatedData, wordStore);
-      setWordStore(newStore);
+      setWordStore(prev => ({ ...prev, [word]: updatedData }));
+      saveWord(word, updatedData);
       console.log(`Word "${word}" loaded from ${source} (timestamp updated)`);
     } else {
       setIsLoading(true);
@@ -117,8 +126,8 @@ const App = () => {
       setWordData(fullData);
       setIsLoading(false);
 
-      const newStore = WordStore.addWord(word, fullData, wordStore);
-      setWordStore(newStore);
+      setWordStore(prev => ({ ...prev, [word]: fullData }));
+      saveWord(word, fullData);
 
       console.log(`Word "${word}" fully loaded`);
       fetchUsage();
@@ -132,14 +141,11 @@ const App = () => {
   };
 
   const handleDeleteUnpinned = () => {
+    const unpinned = Object.keys(wordStore).filter(k => !wordStore[k].pinned);
     const newStore = {};
-    Object.keys(wordStore).forEach(key => {
-      if (pinnedWords.has(key)) {
-        newStore[key] = wordStore[key];
-      }
-    });
+    Object.keys(wordStore).forEach(k => { if (wordStore[k].pinned) newStore[k] = wordStore[k]; });
     setWordStore(newStore);
-    WordStore.save(newStore);
+    if (unpinned.length > 0) deleteWords(unpinned);
   };
 
   const handleSelectFromHistory = (word) => {
@@ -199,7 +205,7 @@ const App = () => {
               </div>
             </div>
       )}
-      {activeSection === 'history' && <HistoryPage wordStore={wordStore} onSelectWord={handleSelectFromHistory} pinnedWords={pinnedWords} onTogglePin={togglePin} />}
+      {activeSection === 'history' && <HistoryPage wordStore={wordStore} wordsLoading={wordsLoading} onSelectWord={handleSelectFromHistory} pinnedWords={pinnedWords} onTogglePin={togglePin} />}
       {activeSection === 'view' && (wordData || isLoading) && <ViewPage word={wordData} onNewCapture={handleNewCapture} onCaptureKanji={handleCapture} isLoading={isLoading} onRetry={() => capturedWord && handleCapture(capturedWord)} isPinned={wordData && pinnedWords.has(wordData.kanji)} onTogglePin={togglePin} />}
       {activeSection === 'view' && !wordData && !isLoading && (
         <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
