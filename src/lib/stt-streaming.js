@@ -60,7 +60,7 @@ export function recognizeWithStreamingSTT(lang) {
       // Set up AudioContext + load AudioWorklet processor
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') await audioCtx.resume();
-      await audioCtx.audioWorklet.addModule('/pcm-processor.js');
+      await audioCtx.audioWorklet.addModule(import.meta.env.BASE_URL + 'pcm-processor.js');
 
       logMsg('🔊 AudioCtx: ' + audioCtx.state + ', ' + audioCtx.sampleRate + 'Hz');
       if (cancelled) { cleanup(); return; }
