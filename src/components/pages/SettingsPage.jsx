@@ -114,12 +114,10 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
                     strokeLinecap="round" transform="rotate(-90 18 18)"/>
                 </svg>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '13px', fontWeight: '500', color: '#888' }}>
-                    Captures used this month
+                  <div style={{ fontSize: '18px', fontWeight: '700', color: '#1a1a2e' }}>
+                    {usage.used} <span style={{ fontSize: '12px', fontWeight: '500', color: '#888' }}>/ {usage.limit}</span>
                   </div>
-                  <div style={{ fontSize: '18px', fontWeight: '700', color: '#1a1a2e', marginTop: '2px' }}>
-                    {Math.max(0, usage.limit - usage.used)} <span style={{ fontSize: '12px', fontWeight: '500', color: '#888' }}>Captures remaining</span>
-                  </div>
+                  <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>{usage.used} captures this month, {Math.max(0, usage.limit - usage.used)} remaining</div>
                   <div style={{ height: '4px', background: '#f0f0f0', borderRadius: '2px', marginTop: '6px', overflow: 'hidden' }}>
                     <div style={{ height: '4px', borderRadius: '2px', width: Math.min(100, usage.used / usage.limit * 100) + '%', background: usage.used >= usage.limit ? '#E24B4A' : '#ffe600' }}/>
                   </div>
