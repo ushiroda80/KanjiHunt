@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { getTipsEnabled, setTipsEnabled, getTipsPermanentlyDismissed, setTipsPermanentlyDismissed, setTipTriggerCount } from '../../lib/storage';
+import { getTipsEnabled, setTipsEnabled, getTipsPermanentlyDismissed, setTipsPermanentlyDismissed, setTipTriggerCount, getStreamingSTTEnabled, setStreamingSTTEnabled } from '../../lib/storage';
 import { getPitchDBMeta, getJlptDBMeta, getReadingsDBMeta, importPitchDB } from '../../lib/databases';
 
 const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinnedWords, onDeleteUnpinned, firebaseUser, onSignIn, onSignOut, usage }) => {
   const [selectedLang, setSelectedLang] = useState(defaultLang);
   const [tipsOn, setTipsOn] = useState(() => getTipsEnabled() && !getTipsPermanentlyDismissed());
+  const [streamingOn, setStreamingOn] = useState(() => getStreamingSTTEnabled());
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
@@ -53,7 +54,7 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
           <h2 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>Settings</h2>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '14px', fontWeight: '600', color: '#5f6368', cursor: 'pointer', padding: '8px' }}>Done</button>
         </div>
-        <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.2.2 · Hatake Development</div>
+        <div style={{ fontSize: '11px', color: '#bbb', marginBottom: '16px' }}>Kanji Hunt v3.2.3 · Hatake Development</div>
 
         <SGroup label="Preferences" />
         <SCard>
@@ -67,6 +68,20 @@ const SettingsPage = ({ defaultLang, onSaveDefaultLang, onClose, wordStore, pinn
                   width: '22px', height: '22px', borderRadius: '50%', background: '#fff',
                   position: 'absolute', top: '2px', transition: 'left 0.2s',
                   left: tipsOn ? '20px' : '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.15)'
+                }}/>
+              </div>
+            }
+          />
+          <SRow icon="🎙️" iconColor="#e0e7ff" label="Streaming STT" sub="Lower latency voice capture (requires AudioWorklet)"
+            right={
+              <div onClick={() => { const v = !streamingOn; setStreamingOn(v); setStreamingSTTEnabled(v); }} style={{
+                width: '44px', height: '26px', borderRadius: '13px', cursor: 'pointer',
+                background: streamingOn ? '#4ade80' : '#ddd', position: 'relative', transition: 'background 0.2s', flexShrink: 0
+              }}>
+                <div style={{
+                  width: '22px', height: '22px', borderRadius: '50%', background: '#fff',
+                  position: 'absolute', top: '2px', transition: 'left 0.2s',
+                  left: streamingOn ? '20px' : '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.15)'
                 }}/>
               </div>
             }

@@ -12,6 +12,10 @@
 import { firebaseAuth, CF_URLS, getAuthToken } from '../config/firebase.js';
 
 const MAX_MS = 8000; // hard cap: send stop after 8s even without silence
+const SILENCE_MS = 650; // local silence detection threshold (matches batch STT)
+const MIN_SPEECH_MS = 200; // minimum speech before silence detection kicks in
+const SPEECH_RMS = 4; // RMS threshold for "speaking" (0-128 scale from AnalyserNode)
+const SILENCE_RMS = 2; // RMS threshold for "silent"
 
 export function recognizeWithStreamingSTT(lang) {
   lang = lang || 'ja-JP';
@@ -24,15 +28,21 @@ export function recognizeWithStreamingSTT(lang) {
     var stream = null;
     var audioCtx = null;
     var workletNode = null;
+    var analyser = null;
+    var rafId = null;
     var ws = null;
     var stopTimer = null;
     var finalTimer = null;
     var setupDoneT0 = 0;
     var lastAudioAt = 0;
+    var speechStartedAt = 0;
+    var silenceStartedAt = 0;
 
     function cleanup() {
       clearTimeout(stopTimer);
       clearTimeout(finalTimer);
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (analyser) { try { analyser.disconnect(); } catch(e) {} analyser = null; }
       if (workletNode) {
         try { workletNode.port.postMessage('flush'); workletNode.disconnect(); } catch(e) {}
         workletNode = null;
@@ -128,20 +138,51 @@ export function recognizeWithStreamingSTT(lang) {
       workletNode.connect(silentGain);
       silentGain.connect(audioCtx.destination);
 
+      // AnalyserNode for 60fps volume meter + local silence detection
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.1;
+      source.connect(analyser);
+      var analyserBuf = new Uint8Array(analyser.fftSize);
+
+      function meterLoop() {
+        if (finalReceived || cancelled) return;
+        analyser.getByteTimeDomainData(analyserBuf);
+        var sum = 0;
+        for (var i = 0; i < analyserBuf.length; i++) {
+          var v = analyserBuf[i] - 128;
+          sum += v * v;
+        }
+        var rms = Math.sqrt(sum / analyserBuf.length);
+
+        // Volume meter at 60fps
+        if (ctrl.updateMeter) {
+          var pct = Math.min(100, rms * 6);
+          ctrl.updateMeter(pct, rms > SPEECH_RMS ? '#ffe600' : 'rgba(255,255,255,0.15)');
+        }
+
+        // Local silence detection (same thresholds as batch STT)
+        var now = Date.now();
+        if (rms > SPEECH_RMS) {
+          if (!speechStartedAt) speechStartedAt = now;
+          silenceStartedAt = 0;
+        } else if (rms < SILENCE_RMS && speechStartedAt) {
+          if (!silenceStartedAt) silenceStartedAt = now;
+          if (speechStartedAt && (now - speechStartedAt >= MIN_SPEECH_MS) &&
+              (now - silenceStartedAt >= SILENCE_MS)) {
+            logMsg('🔇 Local silence detected (' + (now - silenceStartedAt) + 'ms)');
+            if (ctrl.stop) ctrl.stop();
+            return;
+          }
+        }
+
+        rafId = requestAnimationFrame(meterLoop);
+      }
+
       workletNode.port.onmessage = function(e) {
         if (finalReceived || cancelled) return;
         var buffer = e.data; // ArrayBuffer of Int16 PCM (~200ms at 16kHz)
         lastAudioAt = Date.now();
-
-        // Compute RMS for volume meter (Int16 → float scale)
-        if (ctrl.updateMeter) {
-          var samples = new Int16Array(buffer);
-          var sum = 0;
-          for (var i = 0; i < samples.length; i++) { sum += samples[i] * samples[i]; }
-          var rmsInt16 = Math.sqrt(sum / samples.length);
-          var pct = Math.min(100, rmsInt16 / 32767 * 800);
-          ctrl.updateMeter(pct, rmsInt16 > 1000 ? '#ffe600' : 'rgba(255,255,255,0.15)');
-        }
 
         // Stream raw PCM to server as binary message
         if (ws && ws.readyState === 1) {
@@ -150,6 +191,7 @@ export function recognizeWithStreamingSTT(lang) {
       };
 
       setupDoneT0 = Date.now();
+      rafId = requestAnimationFrame(meterLoop);
       logMsg('▶️ Streaming');
 
       // Hard cap — send stop after MAX_MS even if Google hasn't auto-detected silence
@@ -162,6 +204,9 @@ export function recognizeWithStreamingSTT(lang) {
         if (finalReceived || cancelled) return;
         logMsg('⏹ Stop — flushing worklet');
         clearTimeout(stopTimer);
+        // Tear down meter + silence detection first (frees resources, matches batch STT v3.1.4 pattern)
+        if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+        if (analyser) { try { analyser.disconnect(); } catch(e) {} analyser = null; }
         // Flush any remaining buffered samples from worklet before stopping audio capture
         if (workletNode) workletNode.port.postMessage('flush');
         // Brief delay to let the flush message deliver
