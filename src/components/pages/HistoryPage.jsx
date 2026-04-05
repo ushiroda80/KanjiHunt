@@ -10,6 +10,7 @@ const SwipeableRow = ({ rowKey, children, isOpen, onOpen, onClose, onDelete }) =
   const swiping = useRef(false);
   const directionLocked = useRef(false);
   const isHorizontal = useRef(false);
+  const didDrag = useRef(false);
   const rowRef = useRef(null);
 
   const setTranslate = (x, animate) => {
@@ -31,6 +32,7 @@ const SwipeableRow = ({ rowKey, children, isOpen, onOpen, onClose, onDelete }) =
     swiping.current = true;
     directionLocked.current = false;
     isHorizontal.current = false;
+    didDrag.current = false;
   };
 
   const handleMove = (clientX, clientY) => {
@@ -44,6 +46,8 @@ const SwipeableRow = ({ rowKey, children, isOpen, onOpen, onClose, onDelete }) =
     }
 
     if (!directionLocked.current || !isHorizontal.current) return;
+
+    didDrag.current = true;
 
     // Only allow left swipe (negative dx), cap at -DELETE_WIDTH
     const clamped = Math.min(0, Math.max(-DELETE_WIDTH, dx));
@@ -64,13 +68,6 @@ const SwipeableRow = ({ rowKey, children, isOpen, onOpen, onClose, onDelete }) =
       setTranslate(-DELETE_WIDTH, true);
       onOpen(rowKey);
     } else {
-      setTranslate(0, true);
-    }
-  };
-
-  const handleCancel = () => {
-    if (swiping.current) {
-      swiping.current = false;
       setTranslate(0, true);
     }
   };
@@ -106,7 +103,8 @@ const SwipeableRow = ({ rowKey, children, isOpen, onOpen, onClose, onDelete }) =
         onMouseDown={(e) => { e.preventDefault(); handleStart(e.clientX, e.clientY); }}
         onMouseMove={(e) => handleMove(e.clientX, e.clientY)}
         onMouseUp={handleEnd}
-        onMouseLeave={handleCancel}
+        onMouseLeave={handleEnd}
+        onClick={(e) => { if (didDrag.current) { e.stopPropagation(); e.preventDefault(); } }}
         style={{ position: 'relative', background: '#fff', userSelect: 'none' }}
       >
         {children}
