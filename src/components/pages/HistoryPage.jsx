@@ -1,7 +1,123 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 
-const HistoryPage = ({ wordStore, wordsLoading, dictionaryWords, onSelectWord, pinnedWords, onTogglePin }) => {
+const DELETE_WIDTH = 80;
+const SNAP_THRESHOLD = 50;
+
+const SwipeableRow = ({ rowKey, children, isOpen, onOpen, onClose, onDelete }) => {
+  const startX = useRef(0);
+  const startY = useRef(0);
+  const currentX = useRef(0);
+  const swiping = useRef(false);
+  const directionLocked = useRef(false);
+  const isHorizontal = useRef(false);
+  const rowRef = useRef(null);
+
+  const setTranslate = (x, animate) => {
+    if (!rowRef.current) return;
+    rowRef.current.style.transition = animate ? 'transform 0.2s ease' : 'none';
+    rowRef.current.style.transform = `translateX(${x}px)`;
+  };
+
+  const handleStart = (clientX, clientY) => {
+    // If another row is open, close it
+    if (isOpen) {
+      onClose();
+      setTranslate(0, true);
+      return;
+    }
+    startX.current = clientX;
+    startY.current = clientY;
+    currentX.current = 0;
+    swiping.current = true;
+    directionLocked.current = false;
+    isHorizontal.current = false;
+  };
+
+  const handleMove = (clientX, clientY) => {
+    if (!swiping.current) return;
+    const dx = clientX - startX.current;
+    const dy = clientY - startY.current;
+
+    if (!directionLocked.current && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+      directionLocked.current = true;
+      isHorizontal.current = Math.abs(dx) > Math.abs(dy);
+    }
+
+    if (!directionLocked.current || !isHorizontal.current) return;
+
+    // Only allow left swipe (negative dx), cap at -DELETE_WIDTH
+    const clamped = Math.min(0, Math.max(-DELETE_WIDTH, dx));
+    currentX.current = clamped;
+    setTranslate(clamped, false);
+  };
+
+  const handleEnd = () => {
+    if (!swiping.current) return;
+    swiping.current = false;
+
+    if (!isHorizontal.current) {
+      setTranslate(0, true);
+      return;
+    }
+
+    if (currentX.current < -SNAP_THRESHOLD) {
+      setTranslate(-DELETE_WIDTH, true);
+      onOpen(rowKey);
+    } else {
+      setTranslate(0, true);
+    }
+  };
+
+  const handleCancel = () => {
+    if (swiping.current) {
+      swiping.current = false;
+      setTranslate(0, true);
+    }
+  };
+
+  // Snap open/closed when isOpen changes externally
+  const prevOpen = useRef(isOpen);
+  if (prevOpen.current !== isOpen) {
+    prevOpen.current = isOpen;
+    if (!isOpen && rowRef.current) setTranslate(0, true);
+    if (isOpen && rowRef.current) setTranslate(-DELETE_WIDTH, true);
+  }
+
+  return (
+    <div style={{ position: 'relative', overflow: 'hidden' }}>
+      {/* Delete button behind the row */}
+      <div
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        style={{
+          position: 'absolute', right: 0, top: 0, bottom: 0, width: DELETE_WIDTH + 'px',
+          background: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: '#fff', fontWeight: '600', fontSize: '14px', cursor: 'pointer',
+          userSelect: 'none'
+        }}
+      >
+        Delete
+      </div>
+      {/* Swipeable row content */}
+      <div
+        ref={rowRef}
+        onTouchStart={(e) => handleStart(e.touches[0].clientX, e.touches[0].clientY)}
+        onTouchMove={(e) => handleMove(e.touches[0].clientX, e.touches[0].clientY)}
+        onTouchEnd={handleEnd}
+        onMouseDown={(e) => { e.preventDefault(); handleStart(e.clientX, e.clientY); }}
+        onMouseMove={(e) => handleMove(e.clientX, e.clientY)}
+        onMouseUp={handleEnd}
+        onMouseLeave={handleCancel}
+        style={{ position: 'relative', background: '#fff', userSelect: 'none' }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+};
+
+const HistoryPage = ({ wordStore, wordsLoading, dictionaryWords, onSelectWord, pinnedWords, onTogglePin, onDeleteWord }) => {
   const [filter, setFilter] = useState('all');
+  const [openRow, setOpenRow] = useState(null);
 
   if (wordsLoading) {
     return (
@@ -61,7 +177,7 @@ const HistoryPage = ({ wordStore, wordsLoading, dictionaryWords, onSelectWord, p
     <div style={{
       padding: '20px', paddingTop: '28px', paddingBottom: '100px', minHeight: '100vh',
       background: '#fafafa'
-    }}>
+    }} onClick={() => setOpenRow(null)}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e' }}>History</h1>
         <div style={{ display: 'flex', gap: '6px' }}>
@@ -100,55 +216,63 @@ const HistoryPage = ({ wordStore, wordsLoading, dictionaryWords, onSelectWord, p
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
               {section.words.map((w, i) => (
-                <button
+                <SwipeableRow
                   key={w.word + i}
-                  onClick={() => onSelectWord(w.word)}
-                  style={{
-                    background: '#fff',
-                    border: 'none',
-                    borderRadius: '0',
-                    borderBottom: '1px solid #f0f0f0',
-                    padding: '12px 0',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    width: '100%',
-                    textAlign: 'left',
-                  }}
+                  rowKey={w.word + i}
+                  isOpen={openRow === w.word + i}
+                  onOpen={(key) => setOpenRow(key)}
+                  onClose={() => setOpenRow(null)}
+                  onDelete={() => { setOpenRow(null); onDeleteWord(w.kanji || w.word); }}
                 >
-                  <div style={{ width: '40%', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    {w.hiragana && w.hiragana !== w.kanji && (
-                      <span style={{ fontSize: '10px', color: 'rgba(0,0,0,0.65)', marginBottom: '1px' }}>{w.hiragana}</span>
-                    )}
-                    <span style={{ fontSize: '26px', fontWeight: '400', color: '#1a1a2e', fontFamily: "'Noto Serif JP', serif", lineHeight: 1.2 }}>{(() => { const k = w.kanji || w.word || ''; const chars = [...k]; return chars.length > 9 ? chars.slice(0, 9).join('') + '…' : k; })()}</span>
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontSize: '14px', color: '#333', fontWeight: '500',
-                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-                    }}>
-                      {w.english}
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px', alignItems: 'center' }}>
-                      {w.jlpt && w.jlpt !== '?' && (
-                        <span style={{
-                          fontSize: '9px', fontWeight: '700', color: '#fff',
-                          background: jlptColors[w.jlpt] || '#888',
-                          padding: '1px 6px', borderRadius: '4px'
-                        }}>
-                          {w.jlpt}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div
-                    onClick={(e) => { e.stopPropagation(); onTogglePin(w.kanji || w.word); }}
-                    style={{ fontSize: '21px', color: w.pinned ? '#ffe600' : '#ddd', flexShrink: 0, cursor: 'pointer', padding: '4px' }}
+                  <button
+                    onClick={() => { if (openRow === w.word + i) { setOpenRow(null); return; } onSelectWord(w.word); }}
+                    style={{
+                      background: '#fff',
+                      border: 'none',
+                      borderRadius: '0',
+                      borderBottom: '1px solid #f0f0f0',
+                      padding: '12px 0',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      width: '100%',
+                      textAlign: 'left',
+                    }}
                   >
-                    {w.pinned ? '★' : '☆'}
-                  </div>
-                </button>
+                    <div style={{ width: '40%', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                      {w.hiragana && w.hiragana !== w.kanji && (
+                        <span style={{ fontSize: '10px', color: 'rgba(0,0,0,0.65)', marginBottom: '1px' }}>{w.hiragana}</span>
+                      )}
+                      <span style={{ fontSize: '26px', fontWeight: '400', color: '#1a1a2e', fontFamily: "'Noto Serif JP', serif", lineHeight: 1.2 }}>{(() => { const k = w.kanji || w.word || ''; const chars = [...k]; return chars.length > 9 ? chars.slice(0, 9).join('') + '…' : k; })()}</span>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: '14px', color: '#333', fontWeight: '500',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                      }}>
+                        {w.english}
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '4px', alignItems: 'center' }}>
+                        {w.jlpt && w.jlpt !== '?' && (
+                          <span style={{
+                            fontSize: '9px', fontWeight: '700', color: '#fff',
+                            background: jlptColors[w.jlpt] || '#888',
+                            padding: '1px 6px', borderRadius: '4px'
+                          }}>
+                            {w.jlpt}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div
+                      onClick={(e) => { e.stopPropagation(); onTogglePin(w.kanji || w.word); }}
+                      style={{ fontSize: '21px', color: w.pinned ? '#ffe600' : '#ddd', flexShrink: 0, cursor: 'pointer', padding: '4px' }}
+                    >
+                      {w.pinned ? '★' : '☆'}
+                    </div>
+                  </button>
+                </SwipeableRow>
               ))}
             </div>
           </div>

@@ -12,7 +12,7 @@ import AdminPage from './components/pages/AdminPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.2.9 loaded');
+  console.log('[Kanji Hunt] v3.3.0 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
@@ -167,6 +167,13 @@ const App = () => {
     if (unpinned.length > 0) deleteWords(unpinned);
   };
 
+  const handleDeleteWord = (word) => {
+    const newStore = { ...wordStore };
+    delete newStore[word];
+    setWordStore(newStore);
+    deleteWords([word]);
+  };
+
   const handleSelectFromHistory = (word) => {
     const { data } = WordStore.get(word, wordStore);
     if (data) {
@@ -230,7 +237,7 @@ const App = () => {
               </div>
             </div>
       )}
-      {activeSection === 'history' && <HistoryPage wordStore={wordStore} wordsLoading={wordsLoading} onSelectWord={handleSelectFromHistory} pinnedWords={pinnedWords} onTogglePin={togglePin} />}
+      {activeSection === 'history' && <HistoryPage wordStore={wordStore} wordsLoading={wordsLoading} onSelectWord={handleSelectFromHistory} pinnedWords={pinnedWords} onTogglePin={togglePin} onDeleteWord={handleDeleteWord} />}
       {activeSection === 'view' && (wordData || isLoading) && <ViewPage word={wordData} onNewCapture={handleNewCapture} onCaptureKanji={handleCapture} isLoading={isLoading} onRetry={() => capturedWord && handleCapture(capturedWord)} isPinned={wordData && pinnedWords.has(wordData.kanji)} onTogglePin={togglePin} isAdmin={isAdmin} />}
       {activeSection === 'view' && !wordData && !isLoading && (
         <div style={{ padding: '24px', paddingBottom: '100px', minHeight: '100vh', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
