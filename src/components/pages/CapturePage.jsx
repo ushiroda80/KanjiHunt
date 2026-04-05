@@ -624,7 +624,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
               {editReading && (
                 <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', marginBottom: '6px', letterSpacing: '1px' }}>{editReading}</p>
               )}
-              <input type="text" value={editValue} onChange={e => { setEditValue(e.target.value); setEditReading(''); }}
+              <input type="text" value={editValue} onChange={e => { const chars = [...e.target.value]; const max = isJaMode ? 15 : 30; setEditValue(chars.length > max ? chars.slice(0, max).join('') : e.target.value); setEditReading(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleEditSubmit()}
                 autoFocus
                 style={{ width: '100%', padding: '14px 16px', fontSize: [...editValue].length > 9 ? '18px' : [...editValue].length > 6 ? '22px' : '26px', fontWeight: '700', border: 'none', borderRadius: '14px', textAlign: 'center', outline: 'none', background: 'rgba(255,255,255,0.08)', color: '#fff' }} />
@@ -755,21 +755,24 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
             <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.25)', marginBottom: '20px' }}>Add Google API key in Settings to enable voice capture</p>
           )}
           {errorMessage && <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>{errorMessage}</p>}
-          <input type="text" value={manualInput} onChange={(e) => { const chars = [...e.target.value]; setManualInput(chars.length > 12 ? chars.slice(0, 12).join('') : e.target.value); }} onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()} placeholder={isJaMode ? "Type in Japanese..." : "Type in English..."} autoFocus style={{
-            width: '100%', maxWidth: '300px', padding: '14px 20px', fontSize: '24px', fontWeight: '600',
-            border: 'none', borderRadius: '14px', textAlign: 'center', outline: 'none',
-            background: 'rgba(255,255,255,0.08)', color: '#fff'
-          }} />
-          <button onClick={handleManualSubmit} disabled={!manualInput.trim()} style={{
-            marginTop: '14px', padding: '14px 48px',
-            background: manualInput.trim() ? '#ffe600' : 'rgba(255,255,255,0.05)',
-            border: manualInput.trim() ? 'none' : '1px solid rgba(255,255,255,0.1)',
-            borderRadius: '14px', fontSize: '16px', fontWeight: '700',
-            cursor: manualInput.trim() ? 'pointer' : 'default',
-            color: manualInput.trim() ? '#1a1a2e' : 'rgba(255,255,255,0.2)',
-          }}>Capture</button>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'stretch', width: '100%', maxWidth: '340px' }}>
+            <input type="text" value={manualInput} onChange={(e) => { const chars = [...e.target.value]; const max = isJaMode ? 15 : 30; setManualInput(chars.length > max ? chars.slice(0, max).join('') : e.target.value); }} onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()} placeholder={isJaMode ? "Type in Japanese..." : "Type in English..."} autoFocus style={{
+              flex: 1, minWidth: 0, padding: '14px 16px', fontSize: '24px', fontWeight: '600',
+              border: 'none', borderRadius: '14px', textAlign: 'center', outline: 'none',
+              background: 'rgba(255,255,255,0.08)', color: '#fff'
+            }} />
+            <button onClick={handleManualSubmit} disabled={!manualInput.trim()} style={{
+              flex: 'none', width: '64px',
+              background: manualInput.trim() ? '#ffe600' : 'rgba(255,255,255,0.05)',
+              border: manualInput.trim() ? 'none' : '1px solid rgba(255,255,255,0.1)',
+              borderRadius: '14px', fontSize: '16px', fontWeight: '700',
+              cursor: manualInput.trim() ? 'pointer' : 'default',
+              color: manualInput.trim() ? '#1a1a2e' : 'rgba(255,255,255,0.2)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>Go</button>
+          </div>
           {speechMethod !== 'manual' && (
-            <button onClick={startListening} style={{ marginTop: '24px', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.3)', fontSize: '13px', cursor: 'pointer', textDecoration: 'underline' }}>Try voice again</button>
+            <button onClick={startListening} style={{ marginTop: '32px', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.3)', fontSize: '16px', cursor: 'pointer', textDecoration: 'underline' }}>Try voice again</button>
           )}
         </>
       )}
@@ -788,7 +791,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
           maxHeight: '40vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.3.1 ({debugLog.length})</span>
+            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.3.2 ({debugLog.length})</span>
             <button onClick={() => setDebugLog([])} style={{ background: 'none', border: 'none', fontSize: '10px', color: '#666', cursor: 'pointer' }}>Clear</button>
           </div>
           {debugLog.map((e, i) => (
