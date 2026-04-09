@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.3.2 · April 2026*
+*v3.3.3 · April 2026*
 
 ---
 
@@ -24,7 +24,7 @@ These guide every decision. When in doubt, refer here.
 
 4. **Feel native, not web.** The UI targets mobile-first, iOS-like feel. Transitions are 150ms ease. No bouncy animations. Cards have subtle shadows. The capture page is the only dark-mode surface.
 
-5. **Capture speed matters.** The path from "I heard a word" to "card saved" should be as few taps as possible. Auto-select when confidence is high (≥70%). Only show disambiguation when alternatives genuinely compete (≥20%).
+5. **Capture speed matters.** The path from "I heard a word" to "card saved" should be as few taps as possible. Auto-select when confidence is high (≥70%). Only show disambiguation when alternatives genuinely compete (≥20%). Input limits: 15 chars Japanese, 30 chars English (prevents garbage input and API abuse).
 
 6. **Progressive disclosure.** Show the essential info first (word, reading, top definition). Details (kanji breakdown, all definitions, pitch pattern explanation) are available but not forced.
 
@@ -77,7 +77,8 @@ Shared utilities: `extractReading()`, `handleRecordingResult()`, `handleResolved
   - Otherwise → manual text input
 - Cloud STT: MediaRecorder captures audio, detects format via `isTypeSupported()`, sends to `recognizeSpeech` Cloud Function with `ENCODING_UNSPECIFIED` for Safari's MP4/AAC. **Silence detection** via AnalyserNode (fftSize 512, smoothing 0.1) auto-stops recording after 650ms of silence following 200ms+ of speech. Thresholds: speech RMS > 4, silence RMS < 2 (0-128 scale, tuned from iOS 18.7 Safari diagnostics). 5.5s hard cap as safety net. Graceful fallback to timeout-only if AnalyserNode setup fails.
 - **Post-stop pipeline (v3.1.5 — v2.62 architecture, in `src/lib/stt.js`):** Audio chunks pre-converted to ArrayBuffer during recording via `ondataavailable`. On silence detection: if all speech is in already-delivered chunks (`silenceT0 <= lastChunkTime`), pipeline fires immediately from `stopRecording()` without waiting for Safari's `onstop` (~1.9s savings). Otherwise falls back to `onstop`. Auth token obtained on main thread (needs Firebase SDK), then Worker receives pre-converted buffers + token + Cloud Function URL via `postMessage`. Worker does b64 encode + fetch `recognizeSpeech` Cloud Function with Bearer auth. Main thread is free.
-- Chrome Web Speech API: ~10-20% silent failure rate for single-syllable words. 250ms visual delay on capture start. Has built-in silence detection (no AnalyserNode needed).
+- Chrome Web Speech API: ~10-20% silent failure rate for single-syllable words. 250ms visual delay on capture start. Has built-in silence detection (no AnalyserNode needed). Starts automatically on page load — no tap-to-start gate (Chrome's own permission prompt handles consent).
+- **Tap-to-start gate:** Only applies to Cloud STT (Safari/iOS) where `getUserMedia` requires a prior user gesture. Module-level `hasUserGesture` flag flips on first `touchstart`/`click`. Web Speech API skips this entirely (v3.2.9+).
 - No browser/UA sniffing — capability detection only.
 
 ### Safari mobile capture — platform constraints (do not change without re-reading)
@@ -134,7 +135,8 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - JLPT level tagging (N5–N1)
 - Example sentences at user's level (N+1 targeting)
 - Kanji stroke order / breakdown tab
-- Word history with pin/unpin
+- Word history with pin/unpin and swipe-to-delete (individual words)
+- Character limits on capture input (15 JP / 30 EN)
 - Practice mode (placeholder)
 - Voice tips carousel
 - Debug logging system
@@ -195,6 +197,10 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - **v3.1.3** — **Exact v2.62 STT architecture restored.** Copied line-for-line, only substituting auth token + Cloud Function URL for Google API key. Confirmed performing at v2.62 baseline (~10ms Package time on multi-chunk captures). Diagnostic chunk logging still in place (temporary).
 - **v3.1.4** — **Early cleanup before recorder.stop().** Moved RAF cancel, AnalyserNode disconnect, stream track stop, and AudioContext close from `onstop` to `stopRecording()` — i.e., before `recorder.stop()` is called. Result: Package time on late single chunks dropped from ~427ms to 4ms. Confirms that Safari `arrayBuffer()` stall on short recordings is partly resource contention, not purely an inherent platform limitation. The v3.1.2 Worker test (2221ms inside Worker) had all these processes still running — the Worker test disproved *main-thread* contention, not contention overall.
 - **v3.1.5** — **Early pipeline fire.** Bypass Safari's stop→onstop gap (~1.9s) by firing STT pipeline from `stopRecording()` when silence was detected before the last chunk arrived (`silenceT0 <= lastChunkTime`). Safety check prevents audio clipping on longer phrases — falls back to `onstop` when speech may span chunk boundaries. Also: **Vite migration recognized in CLAUDE.md** — updated architecture docs, file locations, and design principles to reflect `src/` structure (legacy `kanji-hunt.html` no longer the build source).
+- **v3.2.9** — **Differentiated listening UI for Web Speech vs Cloud STT.** Chrome/Web Speech API no longer shows "Tap to start recording" gray circle on page load — recording starts automatically. The `needsGesture` gate now only applies to Cloud STT (Safari/iOS) where `getUserMedia` requires a user gesture. Listening text says "Listening for..." (passive) on Web Speech vs "Recording..." (active) on Cloud STT.
+- **v3.3.0** — **Swipe-to-delete on History page.** Swipe left (mobile touch) or click-drag left (desktop mouse) on any word in History reveals a red "Delete" button. Tap/click to remove the word from Firestore. Only one row open at a time. Vertical scroll guard prevents accidental triggers. Reuses existing `deleteWords` API with single-word array.
+- **v3.3.1** — Fixed swipe-to-delete on desktop: `mouseLeave` during drag now finishes the gesture (snap open/closed) instead of cancelling, and click event after drag is suppressed so the parent `onClick` doesn't immediately close the revealed Delete button.
+- **v3.3.2** — **Character limits and manual input UI.** Capture text input capped at 15 characters for Japanese, 30 for English — enforced on both manual and editing inputs. Manual input "Capture" button moved beside the text field (matching editing layout), renamed to "Go". "Try voice again" text 25% larger with 33% more spacing. **resolveEnglish prompt rewritten** to prefer native Japanese (和語/漢語) over katakana loanwords, fixing "hello → ハロー" and "potato → ポテト" mistranslations.
 
 ---
 
@@ -558,7 +564,7 @@ cache/
 
 *Goal: Default-select the most natural equivalent. Show alternatives (including literal if it's a real word) with visual cues that help the user understand the difference — without confusing them.*
 
-**Status: Needs product research before implementation.**
+**Status: Partially addressed in v3.3.2.** The `resolveEnglish` prompt was rewritten to prefer native Japanese (和語/漢語) over katakana loanwords, fixing the most egregious cases (hello → ハロー, potato → ポテト). The broader research questions below remain open — context tags, frequency data, and differentiation UI for the picking page.
 
 **Research plan:**
 - Build a test set of ~15 tricky English→Japanese translations (idioms, business terms, compound nouns, colloquial phrases) and run them through current capture flow
@@ -633,7 +639,7 @@ cache/
 | `src/lib/databases.js` | Reference DB loading (pitch, JLPT, readings) from GitHub |
 | `src/components/pages/CapturePage.jsx` | Capture UI: mic, silence viz, editing, picking, debug log |
 | `src/components/pages/ViewPage.jsx` | Learn page: word card, tabs, TTS |
-| `src/components/pages/HistoryPage.jsx` | Word history list, stars, filters |
+| `src/components/pages/HistoryPage.jsx` | Word history list, stars, filters, swipe-to-delete |
 | `src/components/pages/SettingsPage.jsx` | Settings: account, usage, databases, prefs |
 | `src/components/WordCard.jsx` | Word card component (definitions, pitch, furigana) |
 | `src/components/BottomNav.jsx` | M3 bottom navigation bar |

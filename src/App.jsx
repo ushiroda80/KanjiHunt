@@ -12,7 +12,7 @@ import AdminPage from './components/pages/AdminPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.3.2 loaded');
+  console.log('[Kanji Hunt] v3.3.3 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
@@ -111,12 +111,16 @@ const App = () => {
     setStoredDefaultLang(lang);
   };
 
-  const handleCapture = async (word, sourceContext) => {
+  const handleCapture = async (word, sourceContext, captureContext) => {
     word = word.trim().replace(/[。．.、,\s]+$/, '');
     const hasJapanese = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]/.test(word);
     if (hasJapanese) word = word.replace(/\s+/g, '');
 
-    console.log('[handleCapture] Word: "' + word + '"' + (sourceContext ? ' (from: ' + sourceContext + ')' : ''));
+    // Build capture context for audit logging
+    const ctx = captureContext || {};
+    if (!ctx.inputLang) ctx.inputLang = hasJapanese ? 'ja' : 'en';
+
+    console.log('[handleCapture] Word: "' + word + '"' + (sourceContext ? ' (from: ' + sourceContext + ')' : '') + ` [${ctx.inputLang}]`);
     setCapturedWord(word);
     setActiveSection('view');
 
@@ -138,7 +142,7 @@ const App = () => {
         setWordData(partialWord);
         setIsLoading(false);
         console.log(`Core data for "${word}" ready — showing card`);
-      }, sourceContext);
+      }, sourceContext, ctx);
 
       setWordData(fullData);
       setIsLoading(false);

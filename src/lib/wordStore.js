@@ -6,7 +6,7 @@
 import { firebaseAuth } from '../config/firebase.js';
 import { lookupJlptLevel, getReadingsDB } from './databases.js';
 import { lookupPitchAccent, moraToRomaji } from './pitch.js';
-import { fetchCoreData, fetchExtendedData } from './api.js';
+import { fetchCoreData, fetchExtendedData, logAudit } from './api.js';
 
 // DEPRECATED: Static mock data from early development. Still used as offline fallback
 // for these 3 words. Remove once all data comes from API. Only referenced in WordStore.get().
@@ -277,7 +277,7 @@ export const WordStore = {
   },
 
   // Fetch word data progressively: core first, extended in background
-  fetchOrCreateWord: async (word, onCoreReady, sourceContext) => {
+  fetchOrCreateWord: async (word, onCoreReady, sourceContext, captureContext) => {
     console.log(`[WordStore] fetchOrCreateWord("${word}")${sourceContext ? ' from: ' + sourceContext : ''}, Auth: ${firebaseAuth.currentUser ? 'YES' : 'NO'}`);
 
     if (!firebaseAuth.currentUser) {
@@ -316,6 +316,19 @@ export const WordStore = {
         const finalPitch = kanjiumPitch || extData.pitchAccent || partialWord.pitchAccent;
         const finalPitchSource = kanjiumPitch ? 'kanjium' : (extData.pitchAccent ? 'ai' : null);
 
+        // Fire-and-forget audit log
+        const ctx = captureContext || {};
+        logAudit({
+          word,
+          inputLang: ctx.inputLang || 'ja',
+          englishInput: ctx.englishInput || null,
+          resolveEnglish: ctx.resolveEnglish || null,
+          coreData,
+          pitchAndSentences: { pitchAccent: extData.pitchAccent || [], sentences: extData.sentences || [] },
+          kanjiDetails: extData.kanjiDetails || [],
+          pitchSource: finalPitchSource,
+        });
+
         return WordStore.normalize({
           ...partialWord,
           pitchAccent: finalPitch,
@@ -325,6 +338,20 @@ export const WordStore = {
           isPartial: false
         });
       }
+
+      // Phase 2 failed — still log what we got from Phase 1
+      const ctx2 = captureContext || {};
+      logAudit({
+        word,
+        inputLang: ctx2.inputLang || 'ja',
+        englishInput: ctx2.englishInput || null,
+        resolveEnglish: ctx2.resolveEnglish || null,
+        coreData,
+        pitchAndSentences: null,
+        kanjiDetails: null,
+        pitchSource: kanjiumPitch ? 'kanjium' : null,
+      });
+
       return WordStore.normalize({ ...partialWord, isPartial: false });
     }
 

@@ -32,6 +32,7 @@ export const CF_URLS = {
   updateWordField: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/updateWordField',
   deleteWords: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/deleteWords',
   getAdminUsers: 'https://asia-northeast1-kanji-hunt.cloudfunctions.net/getAdminUsers',
+  logAudit: 'https://logaudit-paobljo2bq-an.a.run.app',
   // Streaming STT WebSocket server (Cloud Run)
   // Dev: routes through Vite proxy (vite.config.js /ws-stt → ws://localhost:8080)
   // Prod: direct wss:// to Cloud Run service

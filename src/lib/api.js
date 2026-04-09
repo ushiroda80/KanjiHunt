@@ -217,6 +217,15 @@ export const deleteWords = async (words) => {
   }
 };
 
+// Log audit record for QA review (fire-and-forget)
+export const logAudit = async (auditData) => {
+  try {
+    await callCloudFunction('logAudit', auditData);
+  } catch (error) {
+    console.error('[logAudit] FAILED:', error.message);
+  }
+};
+
 // Admin — fetch all users with stats
 export const getAdminUsers = async () => {
   const data = await callCloudFunction('getAdminUsers', {});

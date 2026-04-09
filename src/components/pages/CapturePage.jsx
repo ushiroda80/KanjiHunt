@@ -163,7 +163,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
     setTranscript(text);
 
     if (lang === 'ja') {
-      onCaptureRef.current(text);
+      onCaptureRef.current(text, undefined, { inputLang: 'ja' });
     } else {
       setStatus('success');
       setResolving(true);
@@ -406,9 +406,12 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
     catch (e) { capLog(`💥 start() threw: ${e.message}`, 'error'); clearInterval(countdownId); setStatus('manual'); setErrorMessage("Mic unavailable. Type instead:"); }
   }, []);
 
+  const lastResolveRef = useRef(null);
+
   const handleEnglishResolve = async (englishText) => {
     const results = await resolveEnglishToJapanese(englishText);
     setResolving(false);
+    lastResolveRef.current = { englishInput: englishText, resolveEnglish: results };
 
     if (results && results.length > 0) {
       results.forEach(r => { if (r.kanji) r.kanji = r.kanji.trim(); });
@@ -419,19 +422,20 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
 
       if (results.length === 1 || topConfidence >= 70 && !hasRealAlternatives) {
         setTranscript(topResult.kanji);
-        onCaptureRef.current(topResult.kanji);
+        onCaptureRef.current(topResult.kanji, undefined, { inputLang: 'en', englishInput: englishText, resolveEnglish: results });
       } else {
         setCandidates(results.slice(0, 3));
         setStatus('picking');
       }
     } else {
-      onCaptureRef.current(englishText);
+      onCaptureRef.current(englishText, undefined, { inputLang: 'en', englishInput: englishText, resolveEnglish: null });
     }
   };
 
   const handlePickCandidate = (candidate) => {
+    const ctx = lastResolveRef.current || {};
     setCandidates([]);
-    onCaptureRef.current(candidate.kanji);
+    onCaptureRef.current(candidate.kanji, undefined, { inputLang: 'en', englishInput: ctx.englishInput, resolveEnglish: ctx.resolveEnglish });
   };
 
   const handleEditSubmit = () => {
@@ -791,7 +795,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
           maxHeight: '40vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.3.2 ({debugLog.length})</span>
+            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.3.3 ({debugLog.length})</span>
             <button onClick={() => setDebugLog([])} style={{ background: 'none', border: 'none', fontSize: '10px', color: '#666', cursor: 'pointer' }}>Clear</button>
           </div>
           {debugLog.map((e, i) => (
