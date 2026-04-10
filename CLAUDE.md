@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.3.3 · April 2026*
+*v3.3.4 · April 2026*
 
 ---
 
@@ -202,6 +202,7 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - **v3.3.1** — Fixed swipe-to-delete on desktop: `mouseLeave` during drag now finishes the gesture (snap open/closed) instead of cancelling, and click event after drag is suppressed so the parent `onClick` doesn't immediately close the revealed Delete button.
 - **v3.3.2** — **Character limits and manual input UI.** Capture text input capped at 15 characters for Japanese, 30 for English — enforced on both manual and editing inputs. Manual input "Capture" button moved beside the text field (matching editing layout), renamed to "Go". "Try voice again" text 25% larger with 33% more spacing. **resolveEnglish prompt rewritten** to prefer native Japanese (和語/漢語) over katakana loanwords, fixing "hello → ハロー" and "potato → ポテト" mistranslations.
 - **v3.3.3** — **Capture audit logging for QA review.** Fire-and-forget `logAudit` call after every successful (or partially successful) capture sends full context to a new `logAudit` Cloud Function, which stores the record in a Firestore `audit` collection with an auto-incrementing `auditId`. Payload includes: word, inputLang (ja/en), original englishInput (if applicable), resolveEnglish candidate list, coreData, pitch/sentences, kanjiDetails, and pitchSource. Capture context is plumbed through `CapturePage` → `App.handleCapture` → `WordStore.fetchOrCreateWord`, with all 4 capture call sites (Japanese voice, English auto-confirm, English fallback, candidate picking) passing the appropriate context. Fire-and-forget: `logAudit` catches all errors in `api.js`, is never awaited, and cannot break the capture flow. Also logs on Phase-2-fail path so partial captures still generate audit records.
+- **v3.3.4** — **Trim audit log to capture metadata only.** Removed word-detail fields (`coreData`, `pitchAndSentences`, `kanjiDetails`, `pitchSource`, derived `quality` object) from the audit payload — these were massively redundant across captures of the same word. Going forward each audit record stores only the capture event: resolved Japanese word, inputLang, original englishInput, resolveEnglish candidates, plus audit metadata. Client consolidates the two previous `logAudit` call sites (phase-2 success/fail paths) into a single call fired at the start of `fetchOrCreateWord` — now logs all capture attempts including phase-1 failures. Backend `logAudit` Cloud Function simplified to match. Existing bloated records left as-is (not worth migrating). Result: ~90% smaller payload per record.
 
 ---
 

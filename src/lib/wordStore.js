@@ -285,6 +285,15 @@ export const WordStore = {
       return WordStore.createPlaceholder(word);
     }
 
+    // Fire-and-forget audit log — capture event metadata only (no word details)
+    const ctx = captureContext || {};
+    logAudit({
+      word,
+      inputLang: ctx.inputLang || 'ja',
+      englishInput: ctx.englishInput || null,
+      resolveEnglish: ctx.resolveEnglish || null,
+    });
+
     console.log('[WordStore] Phase 1: fetching core data...');
     const coreData = await fetchCoreData(word, sourceContext);
     console.log('[WordStore] Phase 1 result:', coreData ? 'SUCCESS' : 'FAILED');
@@ -316,19 +325,6 @@ export const WordStore = {
         const finalPitch = kanjiumPitch || extData.pitchAccent || partialWord.pitchAccent;
         const finalPitchSource = kanjiumPitch ? 'kanjium' : (extData.pitchAccent ? 'ai' : null);
 
-        // Fire-and-forget audit log
-        const ctx = captureContext || {};
-        logAudit({
-          word,
-          inputLang: ctx.inputLang || 'ja',
-          englishInput: ctx.englishInput || null,
-          resolveEnglish: ctx.resolveEnglish || null,
-          coreData,
-          pitchAndSentences: { pitchAccent: extData.pitchAccent || [], sentences: extData.sentences || [] },
-          kanjiDetails: extData.kanjiDetails || [],
-          pitchSource: finalPitchSource,
-        });
-
         return WordStore.normalize({
           ...partialWord,
           pitchAccent: finalPitch,
@@ -338,19 +334,6 @@ export const WordStore = {
           isPartial: false
         });
       }
-
-      // Phase 2 failed — still log what we got from Phase 1
-      const ctx2 = captureContext || {};
-      logAudit({
-        word,
-        inputLang: ctx2.inputLang || 'ja',
-        englishInput: ctx2.englishInput || null,
-        resolveEnglish: ctx2.resolveEnglish || null,
-        coreData,
-        pitchAndSentences: null,
-        kanjiDetails: null,
-        pitchSource: kanjiumPitch ? 'kanjium' : null,
-      });
 
       return WordStore.normalize({ ...partialWord, isPartial: false });
     }
