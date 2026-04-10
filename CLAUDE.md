@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.3.4 · April 2026*
+*v3.3.5 · April 2026*
 
 ---
 
@@ -481,58 +481,43 @@ Step 1 (Firebase setup) → ✅ DONE — project created, Blaze plan, Auth + Fir
 Step 2 (Cloud Functions) → ✅ DONE — 7 functions deployed to asia-northeast1, invoker: "public"
 Step 3 (Client auth + migration) → ✅ DONE — v3.0.0: Firebase Auth + Cloud Function proxy, v3.1.3: STT pipeline stable
 Step 4 (Rate limiting) → ✅ DONE — backend in Step 2, UI in v3.1.0 (badge + Settings card + modal)
-Step 5 (Security rules) → 🔒 DO BEFORE BETA — Firestore rules, ~30 min
+Step 5 (Security rules) → ✅ DONE — Firestore rules deployed, each user locked to own data
 Step 6 (Admin) → TODO — admin Cloud Functions + in-app panel, lower priority
-Step 7 (Cost protection) → 🔒 DO BEFORE BETA — per-API quotas in Google Cloud Console, ~30 min
+Step 7 (Cost protection) → ✅ DONE — per-API daily quotas set in Google Cloud Console
 ```
 
-#### Security checklist (do before inviting any users)
+#### Security checklist
 
-These two items are the only meaningful security gaps at current scale. Both are ~30 minutes and one-time.
+All pre-beta security items are complete.
 
-| Task | Risk if skipped | Effort |
-|------|----------------|--------|
-| **Step 5: Firestore rules** | Any authenticated user could read/write any other user's data if Firestore is in test mode | 30 min, one-time |
-| **Step 7: API quotas** | A bug or bad actor could run up unlimited Google API charges (budget alerts notify but don't cap) | 30 min, one-time |
-
-**Already handled:**
 - ✅ Firebase auth tokens on every Cloud Function request (Step 2)
 - ✅ Rate limiting per user (Step 4)
 - ✅ Service account key excluded from git via `.gitignore` (v3.2.0)
 - ✅ Dependabot alerts enabled on GitHub for dependency vulnerabilities
 - ✅ No API keys in client code (all server-side in Cloud Functions)
+- ✅ Firestore security rules — each user locked to own data (Step 5)
+- ✅ Per-API daily quotas in Google Cloud Console — hard ceiling on spend (Step 7)
 
-### Phase 4: Per-user word lists
-**4. Personal word lists** — ~2 sessions
+### Pipeline — what's next
 
-*Goal: All logged-in users. Each person has their own vocabulary collection that syncs across devices. Your phone and laptop show the same captured words, pins, and history. Foundation for future SRS/review features.*
+Single numbered list. Everything above this point is shipped.
 
-- Each user has their own captured words tied to their Firebase account
-- Pin/unpin, history, all per-user
-- Syncs across devices (phone + laptop see same words)
-- Builds on Firebase auth from Phase 3
-- Pinned state merged into word documents (eliminates separate pinnedWords localStorage)
+**PL-1. Firestore security rules** — ✅ DONE
+**PL-2. API quotas** — ✅ DONE
 
-### Phase 5: Smart caching
-**5a. TTS audio cache** — ~1 session
+#### Next up
 
-*Goal: All users, cost reduction. Eliminates ~70-80% of API spend. The same word sounds identical every time — no reason to call Google TTS twice for 猫. Users also get faster playback on repeat listens (instant from cache vs ~300ms API round trip).*
+**PL-3. Dictionary cache** — ~1-2 sessions
+*Why:* Every capture runs the full Claude pipeline from scratch, even for common words other users already captured. This is the biggest cost and speed win available. First capture of any word hits Claude and stores the result; every subsequent capture of the same word by any user reads from cache. At 60-70% hit rate, cuts Claude API costs by more than half and makes repeat captures nearly instant.
 
-- First play of any word+speed → Google TTS API call → store base64 MP3 in Firestore
-- Every subsequent play by any user → serve from cache, zero API cost
+**PL-4. TTS audio cache** — ~1 session
+*Why:* Same word sounds identical every time — no reason to call Google TTS twice for 猫. First play stores the audio; every subsequent play by any user is served from cache. Eliminates ~70-80% of TTS API spend and makes repeat playback instant.
 
-**5b. Dictionary cache** — ~1-2 sessions
+**PL-5. Word review / curation UI** — scope TBD
+*Why:* Need a way for an admin or contracted translator to review all captured words across users, spot bad model outputs, and manually correct word details. Builds a high-quality curated dictionary over time. Approach intentionally deferred until dictionary cache (PL-3) establishes the shared data model it would edit.
 
-*Goal: All users, cost reduction + speed. Common words (猫, 東京, 食べる) become instant lookups after the first person captures them. Builds a growing, verified dictionary over time. At 60-70% cache hit rate, cuts Claude API costs by more than half.*
-
-- First time any user captures a word → Claude API call → save full word data to Firestore
-- Second time anyone captures the same word → serve cached response, no API call
-- Kanjium pitch data always overrides AI pitch in cached entries
-- Schema: `{ kanji, hiragana, definitions, pitchAccent, pitchSource, examples, jlptLevel, rubyParts, lookupCount, createdAt }`
-
-### Phase 6: Security hardening
-**6a. Firestore security rules** — ~30 min (Phase 3, Step 5)
-**6b. API quotas** — ~30 min (Phase 3, Step 7)
+**PL-6. Practice mode (SRS)** — scope TBD
+*Why:* The capture side is strong but there's no way to review/quiz what you've learned. Spaced repetition turns the word list into an active study tool.
 
 ### Data architecture (Firebase)
 
@@ -595,6 +580,7 @@ cache/
 
 - **Native iOS app** — Apple's on-device SFSpeechRecognizer (today) or SpeechAnalyzer (iOS 26) supports Japanese, is free, zero latency, no network required. Eliminates the Cloud STT cost and latency entirely. Go native when feature set stabilizes.
 - **Alternative word differentiation** — When showing alternate captures (e.g. 聞く vs 聴く), indicate the relative difference between words. Could be tags like (formal), (academic), (casual), (written), frequency rank, or a short gloss. Approach TBD. Lower priority.
+- **Word review / curation UI** — Admin or contracted translator needs a way to review all captured words across users, see the English input that triggered each capture, search/filter, and manually correct word details (definitions, JLPT, etc.). Purpose: build a high-quality curated dictionary over time and catch bad model outputs. Scope and approach TBD — keep it simple and proportional to the problem.
 - SRS / spaced repetition for practice mode
 - Audio-only review (play word, recall before flip)
 - Shared/group word lists (classroom, study groups)
@@ -603,6 +589,17 @@ cache/
 - Sentence mining (capture sentences, extract words)
 - Offline capture with background sync
 - Monetization (subscription model, usage tiers)
+
+---
+
+## Operational Backlog
+
+### Cloud Storage cleanup (~5 min, saves ~300MB)
+**What:** The Google Cloud Storage bucket `run-sources-kanji-hunt-asia-northeast1` holds deployment zips for the streaming STT Cloud Run service. Each deploy creates a ~307MB zip (large because `@google-cloud/speech` bundles gRPC binaries and protobuf definitions). Two deploys = ~614MB. This is what drives the 588MB figure on the Firebase dashboard — not user data.
+
+**Why it doesn't affect scaling:** This storage grows with *deploys*, not *users*. Our actual user data (Firestore words, audit records, usage) is negligible. Even at 1,000 users with 100 words each, Firestore would be under 100MB.
+
+**Fix:** Delete the older zip in the bucket (the Apr 4, 12:xx one). The newer one is the active deployment. Optionally add a `.gcloudignore` to the streaming STT project to slim future deploys. Neither is urgent — storage cost at this level is pennies/month.
 
 ---
 
