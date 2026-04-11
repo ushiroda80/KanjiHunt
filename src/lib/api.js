@@ -153,23 +153,24 @@ export const resolveEnglishToJapanese = async (englishWord) => {
   }
 };
 
-// Google Cloud TTS via Cloud Function — natural Japanese pronunciation
-export const playGoogleTTS = async (text, speed = 1.0, hiraganaHint = null) => {
+// Google Cloud TTS via Cloud Function — returns audio at speakingRate=0.7 (cached server-side)
+// Caller sets audio.playbackRate for desired speed (normal=1.43, slow=1.0, superslow=0.64)
+export const playGoogleTTS = async (text, hiraganaHint = null) => {
   try {
-    const data = await callCloudFunction('synthesizeSpeech', { text, hiraganaHint, speed });
+    const data = await callCloudFunction('synthesizeSpeech', { text, hiraganaHint });
     if (data.audioContent) {
       return new Audio('data:audio/mp3;base64,' + data.audioContent);
     }
     if (hiraganaHint) {
       console.warn('[GoogleTTS] SSML may have failed, retrying without hint...');
-      return playGoogleTTS(text, speed, null);
+      return playGoogleTTS(text, null);
     }
     return null;
   } catch (error) {
     console.error('[GoogleTTS] Failed:', error);
     if (hiraganaHint) {
       console.warn('[GoogleTTS] Retrying with plain text...');
-      return playGoogleTTS(text, speed, null);
+      return playGoogleTTS(text, null);
     }
     return null;
   }

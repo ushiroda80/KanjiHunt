@@ -268,18 +268,21 @@ export const HearTab = ({ word }) => {
   const handlePlay = async (speed) => {
     if (isPlaying) return;
     setIsPlaying(speed);
-    const rate = speed === 'superslow' ? 0.45 : speed === 'slow' ? 0.7 : 1.0;
+    // Audio is cached at speakingRate=0.7 — adjust playbackRate for desired speed
+    const playbackRate = speed === 'superslow' ? 0.64 : speed === 'slow' ? 1.0 : 1.43;
 
     try {
-      const audio = await playGoogleTTS(word.kanji, rate, word.hiragana);
+      const audio = await playGoogleTTS(word.kanji, word.hiragana);
       if (audio) {
         await new Promise(resolve => {
           if (audio.duration && audio.duration !== Infinity) resolve();
           else audio.addEventListener('loadedmetadata', resolve, { once: true });
         });
 
-        const duration = audio.duration;
-        const timings = word.pitchAccent ? getMoraTimings(word.pitchAccent, duration) : [];
+        audio.playbackRate = playbackRate;
+        // audio.duration is source duration (at 0.7x); effective = source / playbackRate
+        const effectiveDuration = audio.duration / playbackRate;
+        const timings = word.pitchAccent ? getMoraTimings(word.pitchAccent, effectiveDuration) : [];
 
         audio.play();
         const startTime = performance.now();
@@ -295,7 +298,7 @@ export const HearTab = ({ word }) => {
               }
             }
             setActiveMora(current);
-            if (elapsed < duration) {
+            if (elapsed < effectiveDuration) {
               animFrameRef.current = requestAnimationFrame(animate);
             }
           };

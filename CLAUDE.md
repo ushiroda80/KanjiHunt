@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.3.5 · April 2026*
+*v3.3.6 · April 2026*
 
 ---
 
@@ -204,7 +204,7 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - **v3.3.3** — **Capture audit logging for QA review.** Fire-and-forget `logAudit` call after every successful (or partially successful) capture sends full context to a new `logAudit` Cloud Function, which stores the record in a Firestore `audit` collection with an auto-incrementing `auditId`. Payload includes: word, inputLang (ja/en), original englishInput (if applicable), resolveEnglish candidate list, coreData, pitch/sentences, kanjiDetails, and pitchSource. Capture context is plumbed through `CapturePage` → `App.handleCapture` → `WordStore.fetchOrCreateWord`, with all 4 capture call sites (Japanese voice, English auto-confirm, English fallback, candidate picking) passing the appropriate context. Fire-and-forget: `logAudit` catches all errors in `api.js`, is never awaited, and cannot break the capture flow. Also logs on Phase-2-fail path so partial captures still generate audit records.
 - **v3.3.4** — **Trim audit log to capture metadata only.** Removed word-detail fields (`coreData`, `pitchAndSentences`, `kanjiDetails`, `pitchSource`, derived `quality` object) from the audit payload — these were massively redundant across captures of the same word. Going forward each audit record stores only the capture event: resolved Japanese word, inputLang, original englishInput, resolveEnglish candidates, plus audit metadata. Client consolidates the two previous `logAudit` call sites (phase-2 success/fail paths) into a single call fired at the start of `fetchOrCreateWord` — now logs all capture attempts including phase-1 failures. Backend `logAudit` Cloud Function simplified to match. Existing bloated records left as-is (not worth migrating). Result: ~90% smaller payload per record.
 
-- **v3.3.5** — **TTS comparison test + PL-1/PL-2 done.** Added temporary TTS A/B test in Settings (admin-only) comparing server-generated speed vs client-side `playbackRate`. Confirmed client-side approach is good enough — decided to cache at speakingRate=0.7 and adjust playbackRate for normal (1.43x) and superslow (0.64x). Test removed after validation. Marked PL-1 (Firestore security rules) and PL-2 (API quotas) as done in pipeline. Dictionary cache (PL-3) added to Cloud Functions (not yet deployed): cache-aside in `fetchCoreData`, `fetchPitchAndSentences`, `fetchKanjiDetails` using shared `dictionary/{word}` Firestore collection.
+- **v3.3.5** — **TTS comparison test + PL-1/PL-2/PL-3 done.** Added temporary TTS A/B test in Settings (admin-only) comparing server-generated speed vs client-side `playbackRate`. Confirmed client-side approach is good enough — decided to cache at speakingRate=0.7 and adjust playbackRate for normal (1.43x) and superslow (0.64x). Test removed after validation. Marked PL-1 (Firestore security rules) and PL-2 (API quotas) as done in pipeline. Dictionary cache (PL-3) deployed to Cloud Functions: cache-aside in `fetchCoreData`, `fetchPitchAndSentences`, `fetchKanjiDetails` using shared `dictionary/{word}` Firestore collection. First capture of any word hits Claude and writes to cache; subsequent captures by any user read from cache. Single kanji lookups skip cache (result varies by sourceContext).
 
 ---
 
@@ -509,8 +509,8 @@ Single numbered list. Everything above this point is shipped.
 
 #### Next up
 
-**PL-3. Dictionary cache** — ~1-2 sessions
-*Why:* Every capture runs the full Claude pipeline from scratch, even for common words other users already captured. This is the biggest cost and speed win available. First capture of any word hits Claude and stores the result; every subsequent capture of the same word by any user reads from cache. At 60-70% hit rate, cuts Claude API costs by more than half and makes repeat captures nearly instant.
+**PL-3. Dictionary cache** — ✅ DONE
+*Deployed:* Cache-aside in `fetchCoreData`, `fetchPitchAndSentences`, `fetchKanjiDetails` Cloud Functions. First capture of any word hits Claude and writes to `dictionary/{word}` Firestore collection; subsequent captures by any user read from cache. Single kanji lookups skip cache (result varies by sourceContext). Sentences cached per JLPT level (`sentences.N4`, etc.).
 
 **PL-4. TTS audio cache** — ~1 session
 *Why:* Same word sounds identical every time — no reason to call Google TTS twice for 猫. First play stores the audio; every subsequent play by any user is served from cache. Eliminates ~70-80% of TTS API spend and makes repeat playback instant.
