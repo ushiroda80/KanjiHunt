@@ -236,6 +236,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
       };
       sttPromise.ctrl.log = (msg) => capLog(msg);
       sttPromise.ctrl.setWarmingUp = (v) => setWarmingUp(v);
+      if (useStreaming) setWarmingUp(true);
 
       sttPromise.then(result => {
         clearInterval(countdownId);
@@ -276,6 +277,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
         if (captureGenRef.current !== thisGen) { capLog('↩ Stale CloudSTT error discarded'); return; }
         if (gotFinalRef.current) { capLog('↩ CloudSTT cancelled (intentional)'); return; }
         capLog(`❌ CloudSTT error: ${err.message}`, 'error');
+        setWarmingUp(false);
         if (err.message === 'mic-denied') {
           setStatus('manual');
           setErrorMessage("Mic unavailable. Type instead:");

@@ -14,7 +14,6 @@ import { firebaseAuth, CF_URLS, getAuthToken } from '../config/firebase.js';
 const MAX_MS = 8000; // hard cap: send stop after 8s even without silence
 const SPEECH_RMS = 4; // RMS threshold for volume bar color (0-128 scale from AnalyserNode)
 const MIC_HEALTH_RMS = 0.3; // minimum RMS to confirm mic is alive (dead mic = exactly 0.0)
-const MIC_HEALTH_SHOW_MS = 200; // show "warming up" if health check takes longer than this
 const MIC_HEALTH_TIMEOUT_MS = 2000; // give up and retry after this long
 const MIC_HEALTH_SETTLE_MS = 300; // wait after teardown before retrying getUserMedia
 
@@ -161,9 +160,10 @@ export function recognizeWithStreamingSTT(lang) {
       // --- Mic health check: verify non-zero audio before declaring ready ---
       // On iOS Safari cold starts, getUserMedia can resolve with a silently dead stream.
       // Poll AnalyserNode for non-zero RMS. If dead, tear down mic and retry once.
+      // CapturePage shows "Warming up..." during the entire setup phase — we just
+      // signal setWarmingUp(false) when the mic is confirmed alive and ready.
       var healthPassed = false;
       var healthT0 = Date.now();
-      var showedWarmup = false;
       while (!healthPassed && !cancelled) {
         analyser.getByteTimeDomainData(analyserBuf);
         var healthSum = 0;
@@ -171,16 +171,8 @@ export function recognizeWithStreamingSTT(lang) {
           var hv = analyserBuf[hi] - 128;
           healthSum += hv * hv;
         }
-        var healthRms = Math.sqrt(healthSum / analyserBuf.length);
-        if (healthRms > MIC_HEALTH_RMS) { healthPassed = true; break; }
-
-        var healthElapsed = Date.now() - healthT0;
-        if (healthElapsed > MIC_HEALTH_SHOW_MS && !showedWarmup) {
-          showedWarmup = true;
-          if (ctrl.setWarmingUp) ctrl.setWarmingUp(true);
-          logMsg('⏳ Warming up mic...');
-        }
-        if (healthElapsed > MIC_HEALTH_TIMEOUT_MS) break;
+        if (Math.sqrt(healthSum / analyserBuf.length) > MIC_HEALTH_RMS) { healthPassed = true; break; }
+        if (Date.now() - healthT0 > MIC_HEALTH_TIMEOUT_MS) break;
         await new Promise(function(r) { setTimeout(r, 50); });
       }
 
@@ -233,7 +225,7 @@ export function recognizeWithStreamingSTT(lang) {
         }
 
         if (!healthPassed) {
-          if (showedWarmup && ctrl.setWarmingUp) ctrl.setWarmingUp(false);
+          if (ctrl.setWarmingUp) ctrl.setWarmingUp(false);
           logMsg('❌ Mic still silent after retry');
           cleanup();
           reject(new Error('mic-dead'));
@@ -242,7 +234,8 @@ export function recognizeWithStreamingSTT(lang) {
         logMsg('✅ Mic recovered after retry');
       }
 
-      if (showedWarmup && ctrl.setWarmingUp) ctrl.setWarmingUp(false);
+      // Setup complete — mic is alive, transition from "Warming up..." to "Recording..."
+      if (ctrl.setWarmingUp) ctrl.setWarmingUp(false);
       if (cancelled) { cleanup(); return; }
 
       function meterLoop() {
