@@ -28,6 +28,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
   const [resolving, setResolving] = useState(false);
   const [candidates, setCandidates] = useState([]);
   const [editValue, setEditValue] = useState('');
+  const [warmingUp, setWarmingUp] = useState(false);
   const [alternatives, setAlternatives] = useState([]);
   const [editReading, setEditReading] = useState('');
   const [captureConfidence, setCaptureConfidence] = useState(0);
@@ -234,6 +235,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
         if (el) { el.style.width = pct + '%'; el.style.background = color; }
       };
       sttPromise.ctrl.log = (msg) => capLog(msg);
+      sttPromise.ctrl.setWarmingUp = (v) => setWarmingUp(v);
 
       sttPromise.then(result => {
         clearInterval(countdownId);
@@ -279,7 +281,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
           setErrorMessage("Mic unavailable. Type instead:");
         } else {
           setStatus('error');
-          setErrorMessage(err.message === 'stt-api-error' ? "Speech API error — check Google key" : "No speech detected");
+          setErrorMessage(err.message === 'mic-dead' ? "Mic not ready — try again" : err.message === 'stt-api-error' ? "Speech API error — check Google key" : "No speech detected");
         }
       });
 
@@ -589,24 +591,30 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
         <>
           <div onClick={() => {
             if (needsGesture) { setNeedsGesture(false); startListening(); }
-            else if (speechMethod === 'cloudSTT' && activeRecRef.current) { capLog('👆 Tap to submit'); activeRecRef.current.stop(); }
+            else if (speechMethod === 'cloudSTT' && activeRecRef.current && !warmingUp) { capLog('👆 Tap to submit'); activeRecRef.current.stop(); }
           }}
-            style={{ width: '120px', height: '120px', borderRadius: '50%', background: needsGesture ? 'rgba(255,255,255,0.08)' : (isJaMode ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)'), display: 'flex', alignItems: 'center', justifyContent: 'center', animation: (listeningReady && !needsGesture) ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: listeningReady ? 1 : 0.25, cursor: (speechMethod === 'cloudSTT' || needsGesture) ? 'pointer' : 'default' }}>
-            <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: needsGesture ? '#555' : (isJaMode ? '#ff3366' : '#3b82f6'), display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: listeningReady ? 1 : 0.25 }}>
+            style={{ width: '120px', height: '120px', borderRadius: '50%', background: needsGesture ? 'rgba(255,255,255,0.08)' : warmingUp ? 'rgba(255,255,255,0.05)' : (isJaMode ? 'rgba(255,51,102,0.12)' : 'rgba(96,165,250,0.12)'), display: 'flex', alignItems: 'center', justifyContent: 'center', animation: (listeningReady && !needsGesture && !warmingUp) ? 'pulse-ring 1.5s ease infinite' : 'none', opacity: warmingUp ? 0.15 : (listeningReady ? 1 : 0.25), cursor: (speechMethod === 'cloudSTT' || needsGesture) ? 'pointer' : 'default' }}>
+            <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: needsGesture ? '#555' : warmingUp ? '#444' : (isJaMode ? '#ff3366' : '#3b82f6'), display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: warmingUp ? 0.15 : (listeningReady ? 1 : 0.25) }}>
               <div style={{ width: '24px', height: '24px', borderRadius: '4px', background: '#fff' }}/>
             </div>
           </div>
-          <p style={{ marginTop: '28px', fontSize: '18px', fontWeight: '600', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)', transition: 'opacity 0.3s' }}>{needsGesture ? 'Tap to start recording' : (speechMethod === 'webSpeech' ? `Listening for ${isJaMode ? 'Japanese' : 'English'}...` : `Recording ${isJaMode ? 'Japanese' : 'English'}...`)}</p>
-          <p style={{ marginTop: '8px', fontSize: '14px', color: 'rgba(255,255,255,0.4)', opacity: listeningReady ? 1 : 0 }}>
-            {needsGesture ? 'Tap the mic to begin' : (isJaMode ? 'Say a word in Japanese' : 'Say a word in English')}
-          </p>
-          {speechMethod === 'cloudSTT' && !needsGesture && (
+          {warmingUp ? (
+            <p style={{ marginTop: '28px', fontSize: '14px', color: 'rgba(255,255,255,0.5)' }}>Warming up<span className="warming-dots"><span>.</span><span>.</span><span>.</span></span></p>
+          ) : (
+            <>
+              <p style={{ marginTop: '28px', fontSize: '18px', fontWeight: '600', color: listeningReady ? '#fff' : 'rgba(255,255,255,0.1)', transition: 'opacity 0.3s' }}>{needsGesture ? 'Tap to start recording' : (speechMethod === 'webSpeech' ? `Listening for ${isJaMode ? 'Japanese' : 'English'}...` : `Recording ${isJaMode ? 'Japanese' : 'English'}...`)}</p>
+              <p style={{ marginTop: '8px', fontSize: '14px', color: 'rgba(255,255,255,0.4)', opacity: listeningReady ? 1 : 0 }}>
+                {needsGesture ? 'Tap the mic to begin' : (isJaMode ? 'Say a word in Japanese' : 'Say a word in English')}
+              </p>
+            </>
+          )}
+          {speechMethod === 'cloudSTT' && !needsGesture && !warmingUp && (
             <div style={{ marginTop: '16px', width: '160px', height: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '2px', overflow: 'hidden' }}>
               <div ref={volumeBarRef} style={{ height: '100%', borderRadius: '2px', width: '0%', background: 'rgba(255,255,255,0.12)', transition: 'width 0.06s' }}/>
             </div>
           )}
           {transcript && <p style={{ marginTop: '24px', fontSize: '32px', fontWeight: '800', color: '#ffe600' }}>{transcript}</p>}
-          {!needsGesture && <p style={{ marginTop: '16px', fontSize: '13px', color: 'rgba(255,255,255,0.2)' }}>{timeLeft}s</p>}
+          {!needsGesture && !warmingUp && <p style={{ marginTop: '16px', fontSize: '13px', color: 'rgba(255,255,255,0.2)' }}>{timeLeft}s</p>}
           <button onClick={() => { capLog('👆 "Type instead" clicked'); gotFinalRef.current = true; stopCurrentRecognition(); setStatus('manual'); setErrorMessage(''); }} style={{
             marginTop: '20px',
             background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
@@ -795,7 +803,7 @@ const CapturePage = ({ onCapture, defaultLang, usage, isAdmin }) => {
           maxHeight: '40vh', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.3.6 ({debugLog.length})</span>
+            <span style={{ fontSize: '11px', fontWeight: '700', color: '#ffe600' }}>Capture Log v3.3.7 ({debugLog.length})</span>
             <button onClick={() => setDebugLog([])} style={{ background: 'none', border: 'none', fontSize: '10px', color: '#666', cursor: 'pointer' }}>Clear</button>
           </div>
           {debugLog.map((e, i) => (

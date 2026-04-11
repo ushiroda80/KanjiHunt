@@ -13,10 +13,14 @@ import { firebaseAuth, CF_URLS, getAuthToken } from '../config/firebase.js';
 
 const MAX_MS = 8000; // hard cap: send stop after 8s even without silence
 const SPEECH_RMS = 4; // RMS threshold for volume bar color (0-128 scale from AnalyserNode)
+const MIC_HEALTH_RMS = 0.3; // minimum RMS to confirm mic is alive (dead mic = exactly 0.0)
+const MIC_HEALTH_SHOW_MS = 200; // show "warming up" if health check takes longer than this
+const MIC_HEALTH_TIMEOUT_MS = 2000; // give up and retry after this long
+const MIC_HEALTH_SETTLE_MS = 300; // wait after teardown before retrying getUserMedia
 
 export function recognizeWithStreamingSTT(lang) {
   lang = lang || 'ja-JP';
-  var ctrl = { stop: null, cancel: null, updateMeter: null, log: null };
+  var ctrl = { stop: null, cancel: null, updateMeter: null, log: null, setWarmingUp: null };
   var logMsg = function(msg) { if (ctrl.log) ctrl.log(msg); };
 
   var promise = new Promise(async function(resolve, reject) {
@@ -153,6 +157,93 @@ export function recognizeWithStreamingSTT(lang) {
       analyser.smoothingTimeConstant = 0.1;
       source.connect(analyser);
       var analyserBuf = new Uint8Array(analyser.fftSize);
+
+      // --- Mic health check: verify non-zero audio before declaring ready ---
+      // On iOS Safari cold starts, getUserMedia can resolve with a silently dead stream.
+      // Poll AnalyserNode for non-zero RMS. If dead, tear down mic and retry once.
+      var healthPassed = false;
+      var healthT0 = Date.now();
+      var showedWarmup = false;
+      while (!healthPassed && !cancelled) {
+        analyser.getByteTimeDomainData(analyserBuf);
+        var healthSum = 0;
+        for (var hi = 0; hi < analyserBuf.length; hi++) {
+          var hv = analyserBuf[hi] - 128;
+          healthSum += hv * hv;
+        }
+        var healthRms = Math.sqrt(healthSum / analyserBuf.length);
+        if (healthRms > MIC_HEALTH_RMS) { healthPassed = true; break; }
+
+        var healthElapsed = Date.now() - healthT0;
+        if (healthElapsed > MIC_HEALTH_SHOW_MS && !showedWarmup) {
+          showedWarmup = true;
+          if (ctrl.setWarmingUp) ctrl.setWarmingUp(true);
+          logMsg('⏳ Warming up mic...');
+        }
+        if (healthElapsed > MIC_HEALTH_TIMEOUT_MS) break;
+        await new Promise(function(r) { setTimeout(r, 50); });
+      }
+
+      // Retry once if mic was dead
+      if (!healthPassed && !cancelled) {
+        logMsg('🔄 Mic silent — retrying...');
+        // Tear down mic + audio context (keep WebSocket alive)
+        if (analyser) { try { analyser.disconnect(); } catch(e) {} analyser = null; }
+        if (workletNode) { try { workletNode.disconnect(); } catch(e) {} workletNode = null; }
+        if (audioCtx) { try { audioCtx.close(); } catch(e) {} audioCtx = null; }
+        if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; }
+
+        await new Promise(function(r) { setTimeout(r, MIC_HEALTH_SETTLE_MS); });
+        if (cancelled) { cleanup(); return; }
+
+        // Re-acquire mic + rebuild audio graph
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(function() {
+          throw new Error('mic-denied');
+        });
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        await audioCtx.audioWorklet.addModule(import.meta.env.BASE_URL + 'pcm-processor.js');
+
+        workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor');
+        source = audioCtx.createMediaStreamSource(stream);
+        source.connect(workletNode);
+        var silentGain2 = audioCtx.createGain();
+        silentGain2.gain.value = 0;
+        workletNode.connect(silentGain2);
+        silentGain2.connect(audioCtx.destination);
+
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.1;
+        source.connect(analyser);
+        analyserBuf = new Uint8Array(analyser.fftSize);
+
+        // Second health check
+        healthT0 = Date.now();
+        while (!healthPassed && !cancelled) {
+          analyser.getByteTimeDomainData(analyserBuf);
+          var healthSum2 = 0;
+          for (var hi2 = 0; hi2 < analyserBuf.length; hi2++) {
+            var hv2 = analyserBuf[hi2] - 128;
+            healthSum2 += hv2 * hv2;
+          }
+          if (Math.sqrt(healthSum2 / analyserBuf.length) > MIC_HEALTH_RMS) { healthPassed = true; break; }
+          if (Date.now() - healthT0 > MIC_HEALTH_TIMEOUT_MS) break;
+          await new Promise(function(r) { setTimeout(r, 50); });
+        }
+
+        if (!healthPassed) {
+          if (showedWarmup && ctrl.setWarmingUp) ctrl.setWarmingUp(false);
+          logMsg('❌ Mic still silent after retry');
+          cleanup();
+          reject(new Error('mic-dead'));
+          return;
+        }
+        logMsg('✅ Mic recovered after retry');
+      }
+
+      if (showedWarmup && ctrl.setWarmingUp) ctrl.setWarmingUp(false);
+      if (cancelled) { cleanup(); return; }
 
       function meterLoop() {
         if (finalReceived || cancelled) return;

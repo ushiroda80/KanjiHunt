@@ -1,6 +1,6 @@
 # Kanji Hunt — Product Guide
 
-*v3.3.6 · April 2026*
+*v3.3.7 · April 2026*
 
 ---
 
@@ -205,6 +205,8 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 - **v3.3.4** — **Trim audit log to capture metadata only.** Removed word-detail fields (`coreData`, `pitchAndSentences`, `kanjiDetails`, `pitchSource`, derived `quality` object) from the audit payload — these were massively redundant across captures of the same word. Going forward each audit record stores only the capture event: resolved Japanese word, inputLang, original englishInput, resolveEnglish candidates, plus audit metadata. Client consolidates the two previous `logAudit` call sites (phase-2 success/fail paths) into a single call fired at the start of `fetchOrCreateWord` — now logs all capture attempts including phase-1 failures. Backend `logAudit` Cloud Function simplified to match. Existing bloated records left as-is (not worth migrating). Result: ~90% smaller payload per record.
 
 - **v3.3.5** — **TTS comparison test + PL-1/PL-2/PL-3 done.** Added temporary TTS A/B test in Settings (admin-only) comparing server-generated speed vs client-side `playbackRate`. Confirmed client-side approach is good enough — decided to cache at speakingRate=0.7 and adjust playbackRate for normal (1.43x) and superslow (0.64x). Test removed after validation. Marked PL-1 (Firestore security rules) and PL-2 (API quotas) as done in pipeline. Dictionary cache (PL-3) deployed to Cloud Functions: cache-aside in `fetchCoreData`, `fetchPitchAndSentences`, `fetchKanjiDetails` using shared `dictionary/{word}` Firestore collection. First capture of any word hits Claude and writes to cache; subsequent captures by any user read from cache. Single kanji lookups skip cache (result varies by sourceContext).
+
+- **v3.3.6** — **TTS audio cache (PL-4).** `synthesizeSpeech` Cloud Function now caches audio in Firestore `tts/{word}` collection. All audio generated at `speakingRate=0.7` (slow). Client no longer sends speed to server — `playGoogleTTS` signature simplified (removed `speed` param). `HearTab` sets `audio.playbackRate` for each speed: normal=1.43x, slow=1.0x (native), superslow=0.64x. Pitch animation timing corrected with `effectiveDuration = audio.duration / playbackRate`. First play of any word hits Google TTS and caches; subsequent plays by any user are served from cache. Eliminates ~70-80% of TTS API spend.
 
 ---
 
@@ -512,9 +514,8 @@ Single numbered list. Everything above this point is shipped.
 **PL-3. Dictionary cache** — ✅ DONE
 *Deployed:* Cache-aside in `fetchCoreData`, `fetchPitchAndSentences`, `fetchKanjiDetails` Cloud Functions. First capture of any word hits Claude and writes to `dictionary/{word}` Firestore collection; subsequent captures by any user read from cache. Single kanji lookups skip cache (result varies by sourceContext). Sentences cached per JLPT level (`sentences.N4`, etc.).
 
-**PL-4. TTS audio cache** — ~1 session
-*Why:* Same word sounds identical every time — no reason to call Google TTS twice for 猫. First play stores the audio; every subsequent play by any user is served from cache. Eliminates ~70-80% of TTS API spend and makes repeat playback instant.
-*Decision (v3.3.5 A/B test):* Cache ONE clip at speakingRate=0.7 (slow). Client adjusts playbackRate for other speeds: normal=1.43x (0.7→1.0), slow=1.0x (native), superslow=0.64x (0.7→0.45). Slow is the most-used speed for learners and plays at full quality. Both adjustments are smaller than caching at 1.0x, so quality is better. Saves 3x on TTS API calls and storage vs caching per-speed variants.
+**PL-4. TTS audio cache** — ✅ DONE
+*Deployed:* `synthesizeSpeech` Cloud Function caches audio in Firestore `tts/{word}`. All audio generated at `speakingRate=0.7`. Client sets `audio.playbackRate` for other speeds (normal=1.43x, superslow=0.64x). One cached clip serves all three speed buttons. First play hits Google TTS; subsequent plays by any user served from cache.
 
 **PL-5. Word review / curation UI** — scope TBD
 *Why:* Need a way for an admin or contracted translator to review all captured words across users, spot bad model outputs, and manually correct word details. Builds a high-quality curated dictionary over time. Approach intentionally deferred until dictionary cache (PL-3) establishes the shared data model it would edit.
@@ -531,12 +532,11 @@ users/
     words/
       {wordId}: { kanji, hiragana, capturedAt, pinned, ... }
 
-cache/
-  dictionary/
-    {kanji}: { definitions, pitchAccent, examples, ... }
-  tts/
-    {kanji}_normal: { base64, duration }
-    {kanji}_slow: { base64, duration }
+dictionary/
+  {word}: { coreData, pitchAccent, sentences.{level}, kanjiDetails, cachedAt }
+
+tts/
+  {word}: { audioContent: "base64...", cachedAt }
 ```
 
 ### Cost projection (post-cache, 50 beta users)
