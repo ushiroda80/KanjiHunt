@@ -139,7 +139,7 @@ const HistoryPage = ({ wordStore, wordsLoading, dictionaryWords, onSelectWord, p
       english: w.english || '',
       jlpt: w.jlpt || '?',
       capturedAt: w.capturedAt || new Date().toISOString(),
-      pinned: pinnedWords && pinnedWords.has(w.kanji || key)
+      pinned: pinnedWords && pinnedWords.has(key)
     });
   });
 
@@ -220,7 +220,7 @@ const HistoryPage = ({ wordStore, wordsLoading, dictionaryWords, onSelectWord, p
                   isOpen={openRow === w.word + i}
                   onOpen={(key) => setOpenRow(key)}
                   onClose={() => setOpenRow(null)}
-                  onDelete={() => { setOpenRow(null); onDeleteWord(w.kanji || w.word); }}
+                  onDelete={() => { setOpenRow(null); onDeleteWord(w.word); }}
                 >
                   <button
                     onClick={() => { if (openRow === w.word + i) { setOpenRow(null); return; } onSelectWord(w.word); }}
@@ -264,7 +264,7 @@ const HistoryPage = ({ wordStore, wordsLoading, dictionaryWords, onSelectWord, p
                       </div>
                     </div>
                     <div
-                      onClick={(e) => { e.stopPropagation(); onTogglePin(w.kanji || w.word); }}
+                      onClick={(e) => { e.stopPropagation(); onTogglePin(w.word); }}
                       style={{ fontSize: '21px', color: w.pinned ? '#ffe600' : '#ddd', flexShrink: 0, cursor: 'pointer', padding: '4px' }}
                     >
                       {w.pinned ? '★' : '☆'}

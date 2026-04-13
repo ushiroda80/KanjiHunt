@@ -12,7 +12,7 @@ import AdminPage from './components/pages/AdminPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.3.7 loaded');
+  console.log('[Kanji Hunt] v3.3.8 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
