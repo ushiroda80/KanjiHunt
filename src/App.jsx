@@ -12,7 +12,7 @@ import AdminPage from './components/pages/AdminPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.3.12 loaded');
+  console.log('[Kanji Hunt] v3.3.13 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
@@ -234,10 +234,11 @@ const App = () => {
           ? <CapturePage key={captureResetKey} onCapture={handleCapture} defaultLang={defaultLang} usage={usage} isAdmin={isAdmin} />
           : <div style={{ minHeight: '100vh', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', paddingBottom: '100px' }}>
               <div style={{ marginBottom: '32px' }}>
-                <svg width="80" height="52" viewBox="0 0 80 52" xmlns="http://www.w3.org/2000/svg">
-                  <polyline points="12,42 28,42 28,10 68,10" stroke="#e53935" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-                  <circle cx="12" cy="42" r="6" fill="#e53935"/>
-                  <circle cx="68" cy="10" r="6" fill="#e53935"/>
+                <svg width="80" height="80" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+                  <rect width="96" height="96" rx="22" fill="#FFD600"/>
+                  <line x1="28" y1="68" x2="68" y2="28" stroke="#FF1744" strokeWidth="5" strokeLinecap="round"/>
+                  <circle cx="28" cy="68" r="9" fill="#FF1744"/>
+                  <circle cx="68" cy="28" r="9" fill="#FF1744"/>
                 </svg>
               </div>
               <h1 style={{ fontSize: '28px', fontWeight: '700', color: '#1a1a2e', margin: '0 0 8px 0', letterSpacing: '-0.5px' }}>Kanji Hunt</h1>
