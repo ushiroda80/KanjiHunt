@@ -12,7 +12,7 @@ import AdminPage from './components/pages/AdminPage';
 import BottomNav from './components/BottomNav';
 
 const App = () => {
-  console.log('[Kanji Hunt] v3.3.10 loaded');
+  console.log('[Kanji Hunt] v3.3.11 loaded');
   const [activeSection, setActiveSection] = useState('capture');
   const [captureResetKey, setCaptureResetKey] = useState(0);
   const [capturedWord, setCapturedWord] = useState(null);
@@ -233,8 +233,12 @@ const App = () => {
         firebaseUser
           ? <CapturePage key={captureResetKey} onCapture={handleCapture} defaultLang={defaultLang} usage={usage} isAdmin={isAdmin} />
           : <div style={{ minHeight: '100vh', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', paddingBottom: '100px' }}>
-              <div style={{ width: '64px', height: '64px', background: '#ffe600', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '24px' }}>
-                <span style={{ fontSize: '32px', fontFamily: '"Noto Serif JP", serif', fontWeight: '700' }}>漢</span>
+              <div style={{ marginBottom: '32px' }}>
+                <svg width="80" height="52" viewBox="0 0 80 52" xmlns="http://www.w3.org/2000/svg">
+                  <polyline points="12,42 28,42 28,10 68,10" stroke="#e53935" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                  <circle cx="12" cy="42" r="6" fill="#e53935"/>
+                  <circle cx="68" cy="10" r="6" fill="#e53935"/>
+                </svg>
               </div>
               <h1 style={{ fontSize: '28px', fontWeight: '700', color: '#1a1a2e', margin: '0 0 8px 0', letterSpacing: '-0.5px' }}>Kanji Hunt</h1>
               <p style={{ fontSize: '15px', color: '#5f6368', margin: '0 0 40px 0', textAlign: 'center', lineHeight: '1.4' }}>Capture Japanese words as you encounter them</p>
