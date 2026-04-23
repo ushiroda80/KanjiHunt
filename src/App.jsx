@@ -235,7 +235,7 @@ const App = () => {
           : <div style={{ minHeight: '100vh', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', paddingBottom: '100px' }}>
               <div style={{ marginBottom: '32px' }}>
                 <svg width="80" height="80" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
-                  <rect width="96" height="96" rx="22" fill="#FFD600"/>
+                  <rect width="96" height="96" rx="22" fill="#ffe600"/>
                   <line x1="28" y1="68" x2="68" y2="28" stroke="#FF1744" strokeWidth="5" strokeLinecap="round"/>
                   <circle cx="28" cy="68" r="9" fill="#FF1744"/>
                   <circle cx="68" cy="28" r="9" fill="#FF1744"/>
