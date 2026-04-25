@@ -125,52 +125,15 @@ These are hard constraints discovered through extensive testing (v2.46–v2.62, 
 
 ---
 
-## Infrastructure Reference
+## Working Process
 
-### Cloud Function URLs (asia-northeast1)
-```
-fetchCoreData:          https://fetchcoredata-paobljo2bq-an.a.run.app
-fetchPitchAndSentences: https://fetchpitchandsentences-paobljo2bq-an.a.run.app
-fetchKanjiDetails:      https://fetchkanjidetails-paobljo2bq-an.a.run.app
-resolveEnglish:         https://resolveenglish-paobljo2bq-an.a.run.app
-recognizeSpeech:        https://recognizespeech-paobljo2bq-an.a.run.app
-synthesizeSpeech:       https://synthesizespeech-paobljo2bq-an.a.run.app
-getUsage:               https://getusage-paobljo2bq-an.a.run.app
-getWords:               https://asia-northeast1-kanji-hunt.cloudfunctions.net/getWords
-saveWord:               https://asia-northeast1-kanji-hunt.cloudfunctions.net/saveWord
-updateWordField:        https://asia-northeast1-kanji-hunt.cloudfunctions.net/updateWordField
-deleteWords:            https://asia-northeast1-kanji-hunt.cloudfunctions.net/deleteWords
-```
-
-Each function: verify auth → check rate limit → call API with server-side key → return result. See [CLAUDE-HISTORY.md](CLAUDE-HISTORY.md) Phase 3 Step 2 for full proxy table.
-
-### Firebase Config (public, embedded in client)
-```javascript
-const firebaseConfig = {
-  apiKey: "AIzaSyAONlO5vAGAZb3zux6iQGORuksnqsJ7PKc",
-  authDomain: "kanji-hunt.firebaseapp.com",
-  projectId: "kanji-hunt",
-  storageBucket: "kanji-hunt.firebasestorage.app",
-  messagingSenderId: "443591225699",
-  appId: "1:443591225699:web:91ec7ef21a6f33c6506356"
-};
-```
-
-### Secrets (set via `firebase functions:secrets:set`)
-- `ANTHROPIC_API_KEY` — Anthropic API key (for Claude calls)
-- `GOOGLE_STT_KEY` — Google Cloud Speech-to-Text key
-- `GOOGLE_TTS_KEY` — Google Cloud Text-to-Speech key
-
-### Local dev
-- Firebase project root: `/Users/JKO/`
-- Cloud Functions code: `/Users/JKO/functions/index.js`
-- Firebase config: `/Users/JKO/firebase.json`
-- Deploy command: `cd /Users/JKO && firebase deploy --only functions`
-
-### Working process
 - Tadashi is the PM, not an engineer. Never ask him to make code changes manually. Always make code changes directly.
-- For Cloud Functions: provide the full `index.js` file, ready to drop into `/Users/JKO/functions/`. Tadashi deploys via `firebase deploy --only functions`.
+- For Cloud Functions: provide the full `index.js` file, ready to drop into the Firebase functions directory. Tadashi deploys via `firebase deploy --only functions`.
 - For client code: **edit files in `src/`** (not `kanji-hunt.html`). The app is built with Vite from `src/`. Use the `/deploy` skill — it handles version bump, `npm run build`, commit, and push automatically.
+
+## Infrastructure
+
+Cloud Function URLs, Firebase config (public), secrets list, and local dev paths live in [CLAUDE-INFRA.md](CLAUDE-INFRA.md). Read on demand.
 
 ---
 
