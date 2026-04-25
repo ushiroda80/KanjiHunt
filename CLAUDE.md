@@ -1,7 +1,5 @@
 # Kanji Hunt — Product Guide
 
-*v3.3.14 · April 2026*
-
 ---
 
 ## Vision
